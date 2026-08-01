@@ -6,10 +6,10 @@
 // (document.title carries the AUTOPLAY:{json} report).
 
 const W = 1280, H = 720;
-const TS = 24;
+const TS = 40;                       // render tile size — camera crops the map, never letterboxes it
 const MW = 51, MH = 24;
 const HUD_H = 50, LOG_H = 94;
-const OX = (W - MW * TS) >> 1, OY = HUD_H + ((H - HUD_H - LOG_H - MH * TS) >> 1);
+const VH = H - HUD_H - LOG_H;
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -124,7 +124,7 @@ function skillCost(cur) { return 50 * (cur + 1); }
 
 // ---------- state ----------
 let G = null;                        // whole game state
-let anim = { t: 0, floats: [], parts: [], shake: 0, beams: [], flashT: 0, grabT: 0, deathT: 0, winT: 0, alarmT: 0 };
+let anim = { t: 0, floats: [], parts: [], shake: 0, beams: [], rings: [], flashT: 0, flashX: 0, flashY: 0, grabT: 0, deathT: 0, winT: 0, alarmT: 0, frag: null };
 let scene = 'title';                 // title | play | dead | won
 let overlay = null;                  // 'skills' | 'help'
 let lastMath = null;                 // last combat breakdown (for evidence strips + HUD)
@@ -132,6 +132,8 @@ let muted = false;
 
 function newGame(seed) {
   srand(seed);
+  anim.floats.length = 0; anim.parts.length = 0; anim.beams.length = 0; anim.rings.length = 0;
+  anim.frag = null; anim.flashT = 0; anim.grabT = 0; anim.shake = 0;
   G = {
     seed, depth: 0, phase: 'descent', turn: 0,
     p: {
@@ -306,6 +308,10 @@ function descend() {
     const dx = vaultRoom.x + (vaultRoom.w >> 1), dy = vaultRoom.y + (vaultRoom.h >> 1);
     setT(dx, dy - 1, T_DAIS);
     G.vorl = { x: dx, y: dy - 3 };            // 3x3 crown above the dais
+    // the vault is self-lit by the throne: its geometry is known the moment you arrive
+    for (let y = vaultRoom.y - 1; y <= vaultRoom.y + vaultRoom.h; y++)
+      for (let x = vaultRoom.x - 1; x <= vaultRoom.x + vaultRoom.w; x++)
+        if (inMap(x, y)) G.explored[x + y * MW] = 1;
     // service lift out: a real run, but a winnable one — mid-distance, outside the vault
     const lift = tileAtDist(G.map, dx, dy - 1, 16, 24, vaultRoom);
     setT(lift % MW, (lift / MW) | 0, T_UP);
@@ -379,13 +385,34 @@ function log(msg, color = '#9fb4cc') {
 }
 function float(x, y, text, color, size = 15) {
   if (HEADLESS && !SHOT) return;
-  anim.floats.push({ x: OX + x * TS + TS / 2, y: OY + y * TS, text, color, size, ttl: 1.4, vy: -26 });
+  let fy = y * TS;
+  // stack floaters on the same tile instead of overlapping
+  while (anim.floats.some(f => Math.abs(f.x - (x * TS + TS / 2)) < 18 && Math.abs(f.y - fy) < 16)) fy -= 16;
+  anim.floats.push({ x: x * TS + TS / 2, y: fy, text, color, size, ttl: 1.4, vy: -26 });
+}
+function ring(x, y, r1, color, lw = 2.5) {
+  if (HEADLESS && !SHOT) return;
+  anim.rings.push({ x: x * TS + TS / 2, y: y * TS + TS / 2, r1, t: 0, color, lw });
+}
+function ageFx(sec) {
+  // staged captures advance many turns between renders: age transient fx so evidence frames show the fresh beat, not litter
+  for (const f of anim.floats) f.ttl -= sec;
+  for (const p of anim.parts) p.ttl -= sec;
+  for (const b of anim.beams) b.ttl -= sec;
+  for (const r of anim.rings) r.t += sec * 2;
+  anim.floats = anim.floats.filter(f => f.ttl > 0);
+  anim.parts = anim.parts.filter(p => p.ttl > 0);
+  anim.beams = anim.beams.filter(b => b.ttl > 0);
+  anim.rings = anim.rings.filter(r => r.t < 1);
+  if (G) for (const m of G.mons) { if (m.fxFlash) m.fxFlash = Math.max(0, m.fxFlash - sec * 2); if (m.fxLunge) m.fxLunge.t = Math.max(0, m.fxLunge.t - sec * 2); }
+  if (G && G.p.fxFlash) G.p.fxFlash = Math.max(0, G.p.fxFlash - sec * 2);
+  if (G && G.p.fxLunge) G.p.fxLunge.t = Math.max(0, G.p.fxLunge.t - sec * 2);
 }
 function burst(x, y, color, n = 10, spd = 70) {
   if (HEADLESS && !SHOT) return;
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2, v = spd * (0.4 + Math.random() * 0.8);
-    anim.parts.push({ x: OX + x * TS + TS / 2, y: OY + y * TS + TS / 2, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ttl: 0.4 + Math.random() * 0.4, color, size: 1.5 + Math.random() * 2 });
+    anim.parts.push({ x: 0 + x * TS + TS / 2, y: 0 + y * TS + TS / 2, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ttl: 0.4 + Math.random() * 0.4, color, size: 1.5 + Math.random() * 2 });
   }
 }
 
@@ -473,10 +500,13 @@ function playerAttack(m) {
     m.hp -= res.dmg;
     m.asleep = false; if (m.state !== 'hunt') { m.state = 'hunt'; m.tx = p.x; m.ty = p.y; }
     const tag = unaware ? ' — assassination!' : res.crit ? ` — +${res.math.extra} die!` : '';
-    log(`You hit the ${d.name} for ${res.dmg}${tag} [${res.math.dmgT}−${res.math.protT}]`, unaware || res.crit ? '#ffd34a' : '#d7e8f7');
-    float(m.x, m.y, `${res.dmg}`, unaware || res.crit ? '#ffd34a' : '#ff8a5a', unaware ? 22 : 17);
-    burst(m.x, m.y, d.color, res.crit ? 16 : 9);
-    anim.shake = Math.min(6, anim.shake + (res.crit ? 4 : 2));
+    log(`You hit the ${d.name} for ${res.dmg}${tag} [${res.math.dmgT} dmg − ${res.math.protT} prot]`, unaware || res.crit ? '#ffd34a' : '#d7e8f7');
+    float(m.x, m.y, `${res.dmg}`, unaware || res.crit ? '#ffd34a' : '#ff8a5a', unaware ? 26 : res.crit ? 22 : 17);
+    burst(m.x, m.y, d.color, res.crit || unaware ? 18 : 10);
+    p.fxLunge = { dx: m.x - p.x, dy: m.y - p.y, t: 1 };
+    m.fxFlash = 1;
+    if (res.crit || unaware) ring(m.x, m.y, 46, unaware ? '#ffd34a' : d.color);
+    anim.shake = Math.min(7, anim.shake + (res.crit || unaware ? 5 : 2.5));
     if (!HEADLESS) (res.crit || unaware ? SFX.crit : SFX.hit)();
     if (m.hp <= 0) killMonster(m);
   }
@@ -497,7 +527,9 @@ function monsterAttack(m) {
     p.hp -= res.dmg;
     log(`The ${d.name} hits you for ${res.dmg}.${d.phase ? ' It ignores your armor.' : ''}`, '#ff8a8a');
     float(p.x, p.y, `${res.dmg}`, '#ff5a5a', 18);
-    burst(p.x, p.y, '#ff5a5a', 10);
+    burst(p.x, p.y, '#ff5a5a', 12);
+    m.fxLunge = { dx: p.x - m.x, dy: p.y - m.y, t: 1 };
+    p.fxFlash = 1;
     anim.shake = Math.min(8, anim.shake + 3);
     if (!HEADLESS) SFX.hit();
     if (d.webs && res.dmg > 0 && p.webbed <= 0) { p.webbed = 2; log('Threads of hard light bind you!', '#5dff8a'); }
@@ -576,7 +608,9 @@ function quaff(i) {
   }
   if (i === 2) {
     log('FLASH! White fire floods the halls.', '#f5f8ff');
-    anim.flashT = 0.5; makeNoise(p.x, p.y, 12);
+    anim.flashT = 0.9; anim.flashX = p.x * TS + TS / 2; anim.flashY = p.y * TS + TS / 2;
+    ring(p.x, p.y, 130, '#f5f8ff', 3); ring(p.x, p.y, 220, '#f5f8ff', 1.5);
+    makeNoise(p.x, p.y, 12);
     for (const m of G.mons) if (dist(m.x, m.y, p.x, p.y) <= 8 && los(p.x, p.y, m.x, m.y)) { m.stun = 6; m.asleep = false; m.state = 'wary'; m.tx = p.x; m.ty = p.y; }
     if (!HEADLESS) SFX.flash();
   }
@@ -592,6 +626,10 @@ function grabShard() {
   G.p.xp += 200; G.p.xpTotal += 200;
   log('You pry the PRIME SHARD from the crown. +200◆', '#ffd34a');
   log('VORL WAKES. RUN.', '#ff4a4a');
+  // the theft has physics: gold shockwaves and a rain of sparks from the crown
+  ring(p.x, p.y, 90, '#ffd34a', 3.5); ring(p.x, p.y, 180, '#ffd34a', 2); ring(p.x, p.y, 280, '#ff8a3a', 1.5);
+  burst(p.x, p.y, '#ffd34a', 30, 130);
+  if (G.vorl) burst(G.vorl.x, G.vorl.y, '#ff6a4a', 16, 90);
   // the Shard knows the tower: the way out is revealed
   for (let i = 0; i < MW * MH; i++) if (WALKABLE(G.map[i])) {
     G.explored[i] = 1;
@@ -722,7 +760,7 @@ function monsterAct(m) {
     if (dd <= 6 && los(m.x, m.y, G.p.x, G.p.y) && (lampSightBonus() >= 2 || dd <= 3) && m.state === 'hunt') {
       if (!m.charge) {
         m.charge = 1;
-        anim.beams.push({ x0: m.x, y0: m.y, x1: G.p.x, y1: G.p.y, ttl: 0.4, color: hexA(d.color, 0.35), charge: true });
+        anim.beams.push({ x0: m.x, y0: m.y, x1: G.p.x, y1: G.p.y, ttl: 0.4, color: d.color, charge: true });
         if (G.visible[m.x + m.y * MW]) log('The SENTINEL charges its lance.', '#ffb03a');
       } else {
         m.charge = 0;
@@ -760,8 +798,16 @@ function monstersTurn() {
 
 function die(cause) {
   G.p.deaths = cause;
+  G.deathTurn = G.turn;
   scene = 'dead';
   anim.deathT = 0;
+  // the diamond shatters
+  anim.frag = {
+    x: G.p.x * TS + TS / 2, y: G.p.y * TS + TS / 2, t: 0,
+    parts: [0, 1, 2, 3, 4, 5].map(i => ({ vx: Math.cos(i * 1.05 + 0.4), vy: Math.sin(i * 1.05 + 0.4) - 0.6, spin: (i % 2 ? 1 : -1) * (2 + i), len: 5 + (i % 3) * 3 })),
+  };
+  burst(G.p.x, G.p.y, '#7de8ff', 24, 120);
+  ring(G.p.x, G.p.y, 70, '#7de8ff', 3);
   log(`You die at ${FT(G.depth)}ft — ${cause}.`, '#ff4a4a');
   if (!HEADLESS) SFX.die();
 }
@@ -780,15 +826,18 @@ function hsl(h, s, l, a = 1) { return `hsla(${h},${s}%,${l}%,${a})`; }
 
 function drawGlyph(x, y, kind, m) {
   const d = MDEF[kind];
-  const cx = OX + x * TS + TS / 2, cy = OY + y * TS + TS / 2;
+  let cx = x * TS + TS / 2, cy = y * TS + TS / 2;
+  if (m && m.fxLunge && m.fxLunge.t > 0) { cx += m.fxLunge.dx * TS * 0.38 * m.fxLunge.t; cy += m.fxLunge.dy * TS * 0.38 * m.fxLunge.t; }
   const bob = Math.sin(anim.t * 3 + x * 1.7 + y) * (m && m.asleep ? 0.4 : 1.4);
   const r = TS * 0.36;
   ctx.save();
   ctx.translate(cx, cy + bob);
   const asleep = m && m.asleep;
-  const col = asleep ? hexA(d.color, 0.45) : d.color;
-  ctx.shadowColor = col; ctx.shadowBlur = asleep ? 4 : 12;
-  ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.fillStyle = hexA(d.color, asleep ? 0.08 : 0.18);
+  const hitF = m && m.fxFlash > 0;
+  const col = hitF ? (m.fxFlash > 0.55 ? '#ffffff' : '#ff8a8a') : asleep ? hexA(d.color, 0.45) : d.color;
+  ctx.shadowColor = hitF ? '#ffffff' : col; ctx.shadowBlur = hitF ? 18 : asleep ? 4 : 12;
+  if (hitF && m.fxFlash > 0.55) ctx.scale(0.86, 0.86);
+  ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.fillStyle = hitF ? `rgba(255,255,255,${0.25 + m.fxFlash * 0.4})` : hexA(d.color, asleep ? 0.08 : 0.18);
   ctx.beginPath();
   if (d.glyph === 'tri') { ctx.moveTo(0, -r); ctx.lineTo(r, r * 0.8); ctx.lineTo(-r, r * 0.8); ctx.closePath(); }
   else if (d.glyph === 'hex') { for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3 - Math.PI / 6; ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * r, Math.sin(a) * r); } ctx.closePath(); }
@@ -824,11 +873,13 @@ function drawGlyph(x, y, kind, m) {
 
 function drawPlayer() {
   const p = G.p;
-  const cx = OX + p.x * TS + TS / 2, cy = OY + p.y * TS + TS / 2;
+  let cx = p.x * TS + TS / 2, cy = p.y * TS + TS / 2;
+  if (p.fxLunge && p.fxLunge.t > 0) { cx += p.fxLunge.dx * TS * 0.38 * p.fxLunge.t; cy += p.fxLunge.dy * TS * 0.38 * p.fxLunge.t; }
   ctx.save();
   ctx.translate(cx, cy);
-  const col = p.veil > 0 ? hexA('#c86bff', 0.7) : '#e8fbff';
-  ctx.shadowColor = p.veil > 0 ? '#c86bff' : '#7de8ff'; ctx.shadowBlur = 14;
+  const hitF = p.fxFlash > 0;
+  const col = hitF ? '#ffffff' : p.veil > 0 ? hexA('#c86bff', 0.7) : '#e8fbff';
+  ctx.shadowColor = hitF ? '#ff5a5a' : p.veil > 0 ? '#c86bff' : '#7de8ff'; ctx.shadowBlur = hitF ? 20 : 14;
   ctx.strokeStyle = col; ctx.lineWidth = 2.2; ctx.fillStyle = p.veil > 0 ? 'rgba(200,107,255,0.12)' : 'rgba(125,232,255,0.16)';
   const r = TS * 0.38;
   ctx.beginPath(); ctx.moveTo(0, -r); ctx.lineTo(r * 0.72, 0); ctx.lineTo(0, r); ctx.lineTo(-r * 0.72, 0); ctx.closePath();
@@ -848,7 +899,7 @@ function drawPlayer() {
 }
 
 function drawShardDais(x, y) {
-  const cx = OX + x * TS + TS / 2, cy = OY + y * TS + TS / 2;
+  const cx = 0 + x * TS + TS / 2, cy = 0 + y * TS + TS / 2;
   ctx.save();
   ctx.translate(cx, cy);
   ctx.strokeStyle = hexA('#ffd34a', 0.8); ctx.lineWidth = 1.6; ctx.shadowColor = '#ffd34a'; ctx.shadowBlur = 8;
@@ -871,7 +922,7 @@ function drawShardDais(x, y) {
 function drawVorl() {
   if (!G.vorl) return;
   const v = G.vorl;
-  const cx = OX + v.x * TS + TS / 2, cy = OY + v.y * TS + TS / 2;
+  const cx = 0 + v.x * TS + TS / 2, cy = 0 + v.y * TS + TS / 2;
   const awake = G.p.shard;
   ctx.save();
   ctx.translate(cx, cy);
@@ -894,7 +945,7 @@ function drawVorl() {
 }
 
 function drawItem(it) {
-  const cx = OX + it.x * TS + TS / 2, cy = OY + it.y * TS + TS / 2;
+  const cx = 0 + it.x * TS + TS / 2, cy = 0 + it.y * TS + TS / 2;
   const bob = Math.sin(anim.t * 2.5 + it.x) * 1.5;
   ctx.save();
   ctx.translate(cx, cy + bob);
@@ -930,7 +981,16 @@ function render(dt) {
   const hue = depthHue();
   const p = G.p;
 
+  // camera: player-centered, clamped to the map, snapped on floor change
+  const camKey = G.depth + ':' + G.phase;
+  const tcx = clamp(p.x * TS + TS / 2 - W / 2, 0, MW * TS - W);
+  const tcy = clamp(p.y * TS + TS / 2 - VH / 2, 0, MH * TS - VH);
+  if (anim.camFor !== camKey) { anim.camX = tcx; anim.camY = tcy; anim.camFor = camKey; }
+  else { const k = Math.min(1, dt * 7); anim.camX += (tcx - anim.camX) * k; anim.camY += (tcy - anim.camY) * k; }
+
   ctx.save();
+  ctx.beginPath(); ctx.rect(0, HUD_H, W, VH); ctx.clip();
+  ctx.translate(-anim.camX, HUD_H - anim.camY);
   if (anim.shake > 0.2) {
     ctx.translate((Math.random() - 0.5) * anim.shake, (Math.random() - 0.5) * anim.shake);
     anim.shake *= Math.pow(0.02, dt);
@@ -942,7 +1002,7 @@ function render(dt) {
     if (!G.explored[idx]) continue;
     const t = G.map[idx];
     const vis = G.visible[idx];
-    const px = OX + x * TS, py = OY + y * TS;
+    const px = 0 + x * TS, py = 0 + y * TS;
     const dd = Math.hypot(x - p.x, y - p.y);
     const lightR = visRadius();
     const lum = vis ? clamp(1 - dd / (lightR + 1), 0.12, 1) : 0;
@@ -952,17 +1012,20 @@ function render(dt) {
       for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]])
         if (inMap(x + ax, y + ay) && G.explored[x + ax + (y + ay) * MW] && G.map[x + ax + (y + ay) * MW] !== T_WALL) { edge = true; break; }
       if (!edge) continue;
-      ctx.fillStyle = vis ? hsl(hue, 45, 8 + lum * 8) : hsl(220, 25, 6);
+      // value ladder: walls solid, clearly above floor, with a lit top edge
+      ctx.fillStyle = vis ? hsl(hue, 45, 15 + lum * 13) : hsl(222, 20, 9);
       ctx.fillRect(px, py, TS, TS);
-      ctx.strokeStyle = vis ? hsl(hue, 85, 30 + lum * 32, 0.55 + lum * 0.4) : hsl(220, 30, 20, 0.5);
-      ctx.lineWidth = 1.4;
-      ctx.strokeRect(px + 1.5, py + 1.5, TS - 3, TS - 3);
+      ctx.fillStyle = vis ? hsl(hue, 85, 38 + lum * 28, 0.75 + lum * 0.25) : hsl(222, 25, 17, 0.55);
+      ctx.fillRect(px, py, TS, 2.5);
+      ctx.strokeStyle = vis ? hsl(hue, 80, 30 + lum * 26, 0.35 + lum * 0.3) : hsl(222, 25, 14, 0.3);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(px + 1, py + 1, TS - 2, TS - 2);
     } else {
-      ctx.fillStyle = vis ? hsl(hue, 30, 4 + lum * 7) : hsl(225, 20, 3.5);
+      ctx.fillStyle = vis ? hsl(hue, 42, 8.5 + lum * 8.5) : hsl(225, 16, 5.5);
       ctx.fillRect(px, py, TS, TS);
       // circuit dots
       if ((x * 7 + y * 13) % 5 === 0) {
-        ctx.fillStyle = vis ? hsl(hue, 70, 25 + lum * 20, 0.35) : hsl(225, 20, 12, 0.35);
+        ctx.fillStyle = vis ? hsl(hue, 70, 28 + lum * 20, 0.4) : hsl(225, 18, 11, 0.3);
         ctx.fillRect(px + TS / 2 - 1, py + TS / 2 - 1, 2, 2);
       }
       if (t === T_DOOR || t === T_DOOR_OPEN) {
@@ -986,26 +1049,93 @@ function render(dt) {
     }
   }
 
-  // light halo
+  // light halo, clipped to visible tiles so lamplight never leaks through walls
+  ctx.save();
+  ctx.beginPath();
+  for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) if (G.visible[x + y * MW]) ctx.rect(x * TS, y * TS, TS, TS);
+  ctx.clip();
   const lr = visRadius() * TS;
-  const grad = ctx.createRadialGradient(OX + p.x * TS + TS / 2, OY + p.y * TS + TS / 2, lr * 0.2, OX + p.x * TS + TS / 2, OY + p.y * TS + TS / 2, lr);
-  grad.addColorStop(0, hsl(hue, 80, 60, 0.08));
+  const grad = ctx.createRadialGradient(p.x * TS + TS / 2, p.y * TS + TS / 2, lr * 0.2, p.x * TS + TS / 2, p.y * TS + TS / 2, lr);
+  grad.addColorStop(0, hsl(hue, 80, 60, 0.1));
   grad.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = grad;
-  ctx.fillRect(OX, OY, MW * TS, MH * TS);
+  ctx.fillRect(0, 0, MW * TS, MH * TS);
+  ctx.restore();
 
   drawVorl();
   for (const it of G.items) if (G.visible[it.x + it.y * MW]) drawItem(it);
   for (const m of G.mons) if (G.visible[m.x + m.y * MW]) drawGlyph(m.x, m.y, m.kind, m);
-  drawPlayer();
+  if (scene !== 'dead') drawPlayer();          // when dead, the shatter fragments are the corpse
 
-  // beams
+  // beams: charge = thin dashed telegraph; fire = 3-layer lance
   for (const b of anim.beams) {
-    ctx.strokeStyle = hexA(b.color, b.ttl * 4); ctx.lineWidth = 2.5; ctx.shadowColor = b.color; ctx.shadowBlur = 10;
-    ctx.beginPath(); ctx.moveTo(OX + b.x0 * TS + TS / 2, OY + b.y0 * TS + TS / 2); ctx.lineTo(OX + b.x1 * TS + TS / 2, OY + b.y1 * TS + TS / 2); ctx.stroke();
-    ctx.shadowBlur = 0; b.ttl -= dt;
+    const x0 = b.x0 * TS + TS / 2, y0 = b.y0 * TS + TS / 2, x1 = b.x1 * TS + TS / 2, y1 = b.y1 * TS + TS / 2;
+    const a = clamp(b.ttl * 4, 0, 1);
+    ctx.save();
+    if (b.charge) {
+      ctx.setLineDash([6, 8]);
+      ctx.strokeStyle = hexA(b.color, a * 0.45); ctx.lineWidth = 2; ctx.shadowColor = b.color; ctx.shadowBlur = 8;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    } else {
+      ctx.shadowColor = b.color; ctx.shadowBlur = 24;
+      ctx.strokeStyle = hexA(b.color, a * 0.35); ctx.lineWidth = 8;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+      ctx.strokeStyle = hexA(b.color, a); ctx.lineWidth = 3.5;
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(255,255,255,${a})`; ctx.lineWidth = 1.2; ctx.shadowBlur = 12;
+      ctx.stroke();
+      // impact sparks
+      ctx.fillStyle = hexA(b.color, a);
+      for (let i = 0; i < 5; i++) {
+        const sa = i * 1.26 + b.ttl * 7;
+        ctx.fillRect(x1 + Math.cos(sa) * 10 * (1 - a + 0.4) - 1.5, y1 + Math.sin(sa) * 10 * (1 - a + 0.4) - 1.5, 3, 3);
+      }
+    }
+    ctx.restore();
+    b.ttl -= dt;
   }
   anim.beams = anim.beams.filter(b => b.ttl > 0);
+
+  // expanding impact rings
+  for (const r of anim.rings) {
+    r.t += dt * 2.2;
+    const rr = r.r1 * Math.min(1, r.t);
+    ctx.strokeStyle = hexA(r.color, clamp(1 - r.t, 0, 1));
+    ctx.lineWidth = r.lw; ctx.shadowColor = r.color; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.arc(r.x, r.y, rr, 0, Math.PI * 2); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+  anim.rings = anim.rings.filter(r => r.t < 1);
+
+  // death shatter: the diamond breaks apart
+  if (anim.frag) {
+    const f = anim.frag;
+    f.t += dt;
+    const a = Math.max(0.25, 1 - f.t * 0.8);
+    ctx.strokeStyle = hexA('#7de8ff', a); ctx.lineWidth = 2.2; ctx.shadowColor = '#7de8ff'; ctx.shadowBlur = 12;
+    for (const s of f.parts) {
+      const px = f.x + s.vx * Math.min(f.t, 1.1) * 46, py = f.y + s.vy * Math.min(f.t, 1.1) * 46 + 22 * Math.min(f.t, 1.1) * Math.min(f.t, 1.1);
+      ctx.save(); ctx.translate(px, py); ctx.rotate(s.spin * f.t);
+      ctx.beginPath(); ctx.moveTo(-s.len, 0); ctx.lineTo(s.len, 0); ctx.stroke();
+      ctx.restore();
+    }
+    ctx.shadowBlur = 0;
+  }
+
+  // flash-bomb: a real detonation — blinding core, radial falloff, expanding rings
+  if (anim.flashT > 0) {
+    const fa = Math.pow(anim.flashT, 1.6);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const fg = ctx.createRadialGradient(anim.flashX, anim.flashY, 0, anim.flashX, anim.flashY, 340);
+    fg.addColorStop(0, `rgba(255,255,255,${fa})`);
+    fg.addColorStop(0.35, `rgba(240,246,255,${fa * 0.6})`);
+    fg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = fg;
+    ctx.fillRect(anim.flashX - 360, anim.flashY - 360, 720, 720);
+    ctx.restore();
+    anim.flashT -= dt * 1.8;
+  }
 
   // particles & floats
   for (const pt of anim.parts) {
@@ -1033,17 +1163,35 @@ function render(dt) {
     ctx.fillRect(0, 0, W, H);
     anim.alarmT = Math.max(0, anim.alarmT - dt);
   }
-  if (anim.flashT > 0) { ctx.fillStyle = `rgba(255,255,255,${anim.flashT})`; ctx.fillRect(0, 0, W, H); anim.flashT -= dt * 1.4; }
-  if (anim.grabT > 0) {
-    ctx.font = `bold 44px ${MONO}`; ctx.textAlign = 'center';
-    ctx.shadowColor = '#ff4a4a'; ctx.shadowBlur = 30;
-    ctx.fillStyle = hexA('#ff4a4a', clamp(anim.grabT, 0, 1));
-    ctx.fillText('VORL WAKES — RUN', W / 2, H * 0.4);
-    ctx.shadowBlur = 0; anim.grabT -= dt;
+  // per-frame decay of entity hit fx
+  for (const m of G.mons) {
+    if (m.fxFlash > 0) m.fxFlash -= dt * 3;
+    if (m.fxLunge && m.fxLunge.t > 0) m.fxLunge.t -= dt * 5;
   }
+  if (G.p.fxFlash > 0) G.p.fxFlash -= dt * 3;
+  if (G.p.fxLunge && G.p.fxLunge.t > 0) G.p.fxLunge.t -= dt * 5;
 
   renderHUD();
   renderLog();
+
+  // alert banner: scrimmed band, positioned away from the player, drawn over everything
+  if (anim.grabT > 0) {
+    const pScreenY = G.p.y * TS - anim.camY + HUD_H;
+    const by = pScreenY > HUD_H + VH / 2 ? HUD_H + VH * 0.22 : HUD_H + VH * 0.72;
+    const a = clamp(anim.grabT, 0, 1);
+    const band = ctx.createLinearGradient(0, by - 58, 0, by + 58);
+    band.addColorStop(0, 'rgba(0,0,0,0)');
+    band.addColorStop(0.25, `rgba(2,0,4,${a * 0.8})`);
+    band.addColorStop(0.75, `rgba(2,0,4,${a * 0.8})`);
+    band.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = band;
+    ctx.fillRect(0, by - 58, W, 116);
+    ctx.font = `bold 44px ${MONO}`; ctx.textAlign = 'center';
+    ctx.shadowColor = '#ff4a4a'; ctx.shadowBlur = 30;
+    ctx.fillStyle = hexA('#ff4a4a', a);
+    ctx.fillText('VORL WAKES — RUN', W / 2, by + 15);
+    ctx.shadowBlur = 0; anim.grabT -= dt;
+  }
   if (overlay === 'skills') renderSkills();
   if (overlay === 'help') renderHelp();
   if (SHOT && (SHOT === 'combat' || SHOT === 'alert')) renderMathPanel();
@@ -1063,33 +1211,35 @@ function renderHUD() {
   ctx.strokeStyle = hsl(depthHue(), 80, 40, 0.6); ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, HUD_H - 0.5); ctx.lineTo(W, HUD_H - 0.5); ctx.stroke();
   ctx.textAlign = 'left';
-  // HP
-  ctx.font = `bold 13px ${MONO}`; ctx.fillStyle = '#ff7a9e';
+  const hpFrac = Math.max(0, p.hp) / p.hpMax;
+  // HP — chrome sits two notches below the play space; full saturation is reserved for danger
+  ctx.font = `bold 13px ${MONO}`; ctx.fillStyle = '#c25a72';
   ctx.fillText('HP', 16, 20);
-  bar(42, 10, 150, 12, p.hp / p.hpMax, p.hp / p.hpMax < 0.35 ? '#ff4a4a' : '#ff7a9e');
-  ctx.fillStyle = '#e8fbff'; ctx.fillText(`${p.hp}/${p.hpMax}`, 200, 20);
+  bar(42, 10, 150, 12, hpFrac, hpFrac < 0.35 ? '#ff4a4a' : '#c25a72');
+  ctx.fillStyle = '#cfd9e8'; ctx.fillText(`${Math.max(0, p.hp)}/${p.hpMax}`, 200, 20);
   // Power + lamp
-  ctx.fillStyle = '#f4e04a'; ctx.fillText('PWR', 16, 40);
-  bar(42, 30, 150, 12, p.power / p.powerMax, p.power < 200 ? '#ff8a5a' : '#f4e04a');
-  ctx.fillStyle = '#e8fbff'; ctx.fillText(`${p.power}`, 200, 40);
-  ctx.fillStyle = '#9fb4cc'; ctx.fillText('LAMP', 262, 40);
+  ctx.fillStyle = '#a89a3c'; ctx.fillText('PWR', 16, 40);
+  bar(42, 30, 150, 12, p.power / p.powerMax, p.power < 200 ? '#ff8a5a' : '#a89a3c');
+  ctx.fillStyle = '#cfd9e8'; ctx.fillText(`${p.power}/${p.powerMax}`, 200, 40);
+  ctx.fillStyle = '#7d94ad'; ctx.fillText('LAMP', 292, 40);
   for (let i = 0; i < 4; i++) {
-    ctx.fillStyle = i < p.lamp ? '#f4e04a' : '#232840';
-    ctx.fillRect(306 + i * 10, 31, 7, 10);
+    ctx.fillStyle = p.power > 0 && i < p.lamp ? '#a89a3c' : '#232840';
+    ctx.fillRect(338 + i * 10, 31, 7, 10);
   }
   // depth / phase
   ctx.textAlign = 'center';
   ctx.font = `bold 17px ${MONO}`;
-  const phTxt = G.phase === 'escape' ? `ESCAPE — ${FT(G.depth)}FT TO CLIMB` : `DEPTH ${G.depth} · ${FT(G.depth)}FT`;
+  const phTxt = scene === 'won' ? 'SURFACE' : G.phase === 'escape' ? `ESCAPE — ${FT(G.depth)}FT TO CLIMB` : `DEPTH ${G.depth} · ${FT(G.depth)}FT`;
   ctx.shadowColor = G.phase === 'escape' ? '#ff4a4a' : hsl(depthHue(), 90, 60); ctx.shadowBlur = 10;
   ctx.fillStyle = G.phase === 'escape' ? '#ff6a6a' : '#e8fbff';
   ctx.fillText(phTxt, W / 2, 24);
   ctx.shadowBlur = 0;
   ctx.font = `11px ${MONO}`; ctx.fillStyle = '#7d94ad';
-  ctx.fillText(`${WEAPONS[p.weapon].name} ${WEAPONS[p.weapon].dmg.join('d')} · ${ARMORS[p.armor].name} [${ARMORS[p.armor].prot.join('d')}]${p.shard ? ' · ◆SHARD' : ''}${p.veil > 0 ? ` · VEIL ${p.veil}` : ''}`, W / 2, 41);
-  // right: insight + potions
+  const protTxt = ARMORS[p.armor].prot[0] ? ARMORS[p.armor].prot.join('d') : '—';
+  ctx.fillText(`${WEAPONS[p.weapon].name} ${WEAPONS[p.weapon].dmg.join('d')} · ${ARMORS[p.armor].name} ${protTxt}${p.shard ? ' · ◆SHARD' : ''}${p.veil > 0 ? ` · VEIL ${p.veil}` : ''}`, W / 2, 41);
+  // right: insight + potions — insight wears gold, never the player's cyan
   ctx.textAlign = 'right';
-  ctx.font = `bold 14px ${MONO}`; ctx.fillStyle = '#8be0ff';
+  ctx.font = `bold 14px ${MONO}`; ctx.fillStyle = '#ffd34a';
   ctx.fillText(`◆ ${p.xp}`, W - 16, 20);
   ctx.font = `11px ${MONO}`; ctx.fillStyle = '#7d94ad';
   ctx.fillText('[S]KILLS  [?]HELP', W - 16, 40);
@@ -1098,9 +1248,9 @@ function renderHUD() {
     const x = W - 350 + i * 62;
     ctx.fillStyle = p.potions[i] > 0 ? POTION_COLOR[i] : '#3a4258';
     ctx.font = `bold 12px ${MONO}`;
-    ctx.fillText(`${i + 1}·${POTIONS[i]}`, x, 20);
-    ctx.fillStyle = p.potions[i] > 0 ? '#e8fbff' : '#3a4258';
-    ctx.fillText(`×${p.potions[i]}`, x + 8, 34);
+    ctx.fillText(`[${i + 1}]${POTIONS[i]}`, x, 20);
+    ctx.fillStyle = p.potions[i] > 0 ? '#cfd9e8' : '#3a4258';
+    ctx.fillText(`×${p.potions[i]}`, x + 10, 34);
   }
 }
 
@@ -1111,10 +1261,10 @@ function renderLog() {
   ctx.beginPath(); ctx.moveTo(0, y0 + 0.5); ctx.lineTo(W, y0 + 0.5); ctx.stroke();
   ctx.textAlign = 'left'; ctx.font = `13px ${MONO}`;
   const recent = G.log.slice(-4);
+  const ramp = [0.35, 0.55, 0.75, 1.0].slice(4 - recent.length);
   for (let i = 0; i < recent.length; i++) {
     const l = recent[i];
-    const age = G.turn - l.turn;
-    ctx.fillStyle = hexA(l.color, clamp(1 - age * 0.12, 0.35, 1));
+    ctx.fillStyle = hexA(l.color, ramp[i]);
     ctx.fillText(l.msg, 16, y0 + 22 + i * 18);
   }
   ctx.textAlign = 'right'; ctx.fillStyle = '#3a4258'; ctx.font = `11px ${MONO}`;
@@ -1136,9 +1286,9 @@ function renderSkills() {
   const p = G.p;
   const w = 460, h = 250, x = (W - w) / 2, y = (H - h) / 2;
   panel(x, y, w, h, 'SKILLS — SPEND INSIGHT', '#8be0ff');
-  ctx.font = `13px ${MONO}`; ctx.textAlign = 'left';
-  ctx.fillStyle = '#9fb4cc';
-  ctx.fillText(`insight ◆ ${p.xp}`, x + 24, y + 52);
+  ctx.font = `bold 14px ${MONO}`; ctx.textAlign = 'left';
+  ctx.fillStyle = '#ffd34a';
+  ctx.fillText(`◆ ${p.xp}`, x + 24, y + 52);
   const desc = ['hit harder, hit at all', 'not get hit', 'not be seen', '+6 HP each rank'];
   for (let i = 0; i < 4; i++) {
     const yy = y + 84 + i * 36;
@@ -1150,7 +1300,10 @@ function renderSkills() {
     ctx.fillStyle = '#e8fbff';
     ctx.fillText(`${cur}`, x + 190, yy);
     ctx.fillStyle = can ? '#5dff8a' : '#3a4258';
-    ctx.fillText(`→ ${cur + 1} for ${cost}◆`, x + 220, yy);
+    ctx.fillText(`→ ${cur + 1}`, x + 220, yy);
+    ctx.textAlign = 'right';
+    ctx.fillText(`${cost}◆`, x + w - 60, yy);
+    ctx.textAlign = 'left';
     ctx.fillStyle = '#7d94ad'; ctx.font = `11px ${MONO}`;
     ctx.fillText(desc[i], x + 24, yy + 14);
   }
@@ -1184,22 +1337,27 @@ function renderMathPanel() {
   if (SHOT === 'alert') { renderStealthPanel(); return; }
   if (!lastMath) return;
   const m = lastMath;
-  const w = 470, h = 128, x = W - w - 14, y = HUD_H + 12;
+  const w = 470, h = 148, x = W - w - 14, y = HUD_H + 12;
   panel(x, y, w, h, null, '#ffd34a');
   ctx.textAlign = 'left';
+  const enemyAtk = m.aName !== 'YOU';
   ctx.font = `bold 13px ${MONO}`; ctx.fillStyle = '#ffd34a';
   ctx.fillText(`COMBAT MATH — ${m.aName} → ${m.dName}${m.unaware ? ' (UNAWARE)' : ''}`, x + 14, y + 22);
   ctx.font = `13px ${MONO}`; ctx.fillStyle = '#e8fbff';
   const sgn = v => (v < 0 ? `${v}` : `+${v}`);
   ctx.fillText(`ATT 1d10[${m.attRoll}]${sgn(m.attMod)} = ${m.attScore}   vs   EVA 1d10[${m.evRoll}]${sgn(m.evMod)} = ${m.evScore}`, x + 14, y + 46);
-  ctx.fillStyle = m.hit ? '#5dff8a' : '#ff8a8a';
+  // color keyed to consequence for the player, not for the attacker
+  ctx.fillStyle = !m.hit ? '#8aa0b8' : enemyAtk ? '#ff8a5a' : '#5dff8a';
   ctx.fillText(`net ${m.net} → ${m.hit ? 'HIT' : 'MISS'}${m.hit && m.extra ? ` (+${m.extra} damage ${m.extra === 1 ? 'die' : 'dice'})` : ''}`, x + 14, y + 68);
   if (m.hit) {
     ctx.fillStyle = '#e8fbff';
     ctx.fillText(`DMG ${m.dmgDice[0]}d${m.dmgDice[1]}[${m.dmgRolls.join(',')}] = ${m.dmgT}   −   PROT ${m.protDice[0]}d${m.protDice[1]}[${m.protRolls.join(',') || '—'}] = ${m.protT}`, x + 14, y + 90);
-    ctx.fillStyle = '#ffd34a'; ctx.font = `bold 14px ${MONO}`;
-    ctx.fillText(`FINAL ${m.dmg}`, x + 14, y + 112);
+    ctx.font = `bold 14px ${MONO}`;
+    if (m.dmg === 0) { ctx.fillStyle = '#8aa0b8'; ctx.fillText('ABSORBED — 0', x + 14, y + 112); }
+    else { ctx.fillStyle = enemyAtk ? '#ff6a6a' : '#ffd34a'; ctx.fillText(`FINAL ${m.dmg}`, x + 14, y + 112); }
   }
+  ctx.font = `10px ${MONO}`; ctx.fillStyle = '#6a7a90';
+  ctx.fillText('EVIDENCE STRIP — dice are live engine rolls; target is an immortal dummy', x + 14, y + h - 12);
 }
 
 function renderStealthPanel() {
@@ -1218,28 +1376,45 @@ function renderStealthPanel() {
   ctx.fillStyle = '#e8fbff';
   ctx.fillText(`${q.name} (${q.asleep ? 'ASLEEP' : q.state.toUpperCase()}) checks via ${q.via}`, x + 14, y + 46);
   ctx.fillText(`PER 1d10[${q.roll}]+${q.per} = ${q.roll + q.per}   vs   STL 1d10[${q.def}]+${q.stealth} = ${q.def + q.stealth}`, x + 14, y + 68);
-  ctx.fillStyle = q.woke ? '#ff8a5a' : '#5dff8a';
+  // verdict reflects the monster's actual state, not just this check
+  let verdict, vcol;
+  if (q.asleep) { verdict = q.woke ? 'WAKES → WARY' : 'SLEEPS ON — unheard'; vcol = q.woke ? '#ff8a5a' : '#5dff8a'; }
+  else if (q.state === 'hunt') { verdict = 'ALREADY HUNTING — it knows where you are'; vcol = '#ff6a6a'; }
+  else { verdict = q.woke ? 'SPOTS YOU → HUNT' : `CHECK FAILS — still ${q.state.toUpperCase()}`; vcol = q.woke ? '#ff8a5a' : '#5dff8a'; }
+  ctx.fillStyle = vcol;
   ctx.font = `bold 14px ${MONO}`;
-  ctx.fillText(q.woke ? (q.asleep ? 'WAKES → WARY' : 'SPOTS YOU → HUNT') : 'UNAWARE — you pass unseen', x + 14, y + 96);
+  ctx.fillText(verdict, x + 14, y + 96);
 }
 
 function renderTitle() {
   const t = anim.t;
-  // arcology silhouette: descending shafts
+  // arcology silhouette: descending shafts, fading in from the top, composed toward the center
   ctx.save();
-  for (let i = 0; i < 9; i++) {
-    const hue = DEPTH_HUE[i];
-    const y = 180 + i * 56;
-    ctx.strokeStyle = hsl(hue, 80, 40, 0.35);
+  for (let i = 0; i < 12; i++) {
+    const hue = DEPTH_HUE[Math.min(i, 8)];
+    const y = 12 + i * 56;
+    const fadeTop = clamp((y - 10) / 280, 0.15, 1);
     ctx.lineWidth = 1;
-    for (let x = 100; x < W - 100; x += 24) {
-      if ((x * 13 + i * 29) % 7 < 4) { ctx.strokeRect(x, y, 18, 40); }
+    for (let x = 60; x < W - 60; x += 24) {
+      if ((x * 13 + i * 29) % 7 < 4) {
+        const centerBias = 1.35 - Math.abs(x - W / 2) / (W * 0.55) - Math.abs(y - 300) / 900;
+        ctx.strokeStyle = hsl(hue, 80, 40, 0.42 * fadeTop * clamp(centerBias, 0.25, 1));
+        ctx.strokeRect(x, y, 18, 40);
+      }
     }
   }
   // scanline sweep
   const sy = (t * 60) % H;
   ctx.fillStyle = 'rgba(139,224,255,0.05)';
   ctx.fillRect(0, sy, W, 3);
+  // scrims: one smooth pool of dark behind each text group
+  for (const [cy, ch] of [[240, 260], [400, 90], [500, 60], [560, 40], [640, 40]]) {
+    const g = ctx.createRadialGradient(W / 2, cy, 60, W / 2, cy, ch + 320);
+    g.addColorStop(0, 'rgba(3,2,8,0.78)');
+    g.addColorStop(1, 'rgba(3,2,8,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, cy - ch - 80, W, (ch + 80) * 2);
+  }
   ctx.restore();
 
   // wordmark
@@ -1276,9 +1451,9 @@ function renderTitle() {
     ctx.fillText('PRESS ENTER', W / 2, 500);
     ctx.shadowBlur = 0;
   }
-  ctx.font = `12px ${MONO}`; ctx.fillStyle = '#5d6f88';
+  ctx.font = `12px ${MONO}`; ctx.fillStyle = '#8496ac';
   ctx.fillText('arrows/WASD move · bump to fight · L lamp · 1-3 vials · S skills · ? help', W / 2, 560);
-  ctx.fillStyle = '#3a4258';
+  ctx.fillStyle = '#68788e';
   ctx.fillText('zero assets — every pixel and sound from code · AGPL', W / 2, 640);
 }
 
@@ -1295,7 +1470,7 @@ function renderDeath(dt) {
   ctx.fillText('THE TOWER KEEPS YOU', W / 2, 280);
   ctx.shadowBlur = 0;
   ctx.font = `16px ${MONO}`; ctx.fillStyle = '#e8fbff';
-  ctx.fillText(`${G.p.deaths} · ${FT(G.depth)}ft · turn ${G.turn}${G.p.shard ? ' · the Shard sinks with you' : ''}`, W / 2, 330);
+  ctx.fillText(`${G.p.deaths} · ${FT(G.depth)}ft · turn ${G.deathTurn ?? G.turn}${G.p.shard ? ' · the Shard sinks with you' : ''}`, W / 2, 330);
   ctx.fillStyle = '#9fb4cc'; ctx.font = `14px ${MONO}`;
   ctx.fillText(`${G.p.kills} destroyed · ${G.p.xpTotal}◆ insight earned · seed ${G.seed}`, W / 2, 358);
   ctx.font = `bold 16px ${MONO}`; ctx.fillStyle = '#8be0ff';
@@ -1314,6 +1489,16 @@ function renderWin(dt) {
   ctx.shadowColor = '#ffd34a'; ctx.shadowBlur = 36;
   ctx.fillStyle = '#ffe9a8';
   ctx.fillText('OUT WITH THE SHARD', W / 2, 270);
+  // the object of the whole heist, held up to the light
+  ctx.save();
+  ctx.translate(W / 2, 470 + Math.sin(anim.t * 2) * 5);
+  const pl = 1 + 0.06 * Math.sin(anim.t * 3);
+  ctx.scale(pl * 2.2, pl * 2.2);
+  ctx.shadowColor = '#ffd34a'; ctx.shadowBlur = 40;
+  ctx.fillStyle = 'rgba(255,211,74,0.75)'; ctx.strokeStyle = '#fff3cd'; ctx.lineWidth = 1.6;
+  ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(9, -2); ctx.lineTo(0, 12); ctx.lineTo(-9, -2); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.restore();
   ctx.shadowBlur = 0;
   ctx.font = `16px ${MONO}`; ctx.fillStyle = '#e8fbff';
   ctx.fillText(`${G.turn} turns · ${G.p.kills} destroyed · ${G.stats.timesSpotted} times seen`, W / 2, 330);
@@ -1568,7 +1753,7 @@ function runAutoplay() {
 // SHOT STAGING — deterministic frames for the critic harness
 // ==================================================================
 function stageWalk(moves) {
-  for (const [dx, dy] of moves) playerTurn(dx === 0 && dy === 0 ? { type: 'wait' } : { type: 'move', dx, dy });
+  for (const [dx, dy] of moves) { playerTurn(dx === 0 && dy === 0 ? { type: 'wait' } : { type: 'move', dx, dy }); ageFx(0.45); }
 }
 function stageArena(seed) {
   // tiny fixed room for evidence strips
@@ -1594,7 +1779,7 @@ function stageArena(seed) {
 
 const STAGES = {
   title() { scene = 'title'; anim.t = 2.2; },
-  floor1() { newGame(11); scene = 'play'; stageWalk([[1, 0], [1, 0], [0, 1], [1, 0], [0, 0]]); anim.t = 1.3; },
+  floor1() { newGame(11); scene = 'play'; stageWalk([[1, 0], [1, 0], [0, 1], [1, 0], [1, 0], [1, 0], [0, 1], [1, 0], [1, 0], [1, 0], [0, 0]]); anim.t = 1.3; },
   combat(f) {
     // frames 0: assassination of a sleeper · 1-3: waking hound takes hits · 4-7: hound answers
     stageArena(77);
@@ -1604,11 +1789,12 @@ const STAGES = {
     h.hp = 99;                      // evidence dummy: the strip must outlive the dice
     if (f === 0) { h.asleep = true; h.state = 'unaware'; }
     G.mons.push(h);
-    log('The HOUND lunges from the dark.', '#f4e04a');
+    log(f === 0 ? 'A HOUND sleeps in the open. Your blade is out.' : 'The fight is joined.', '#f4e04a');
     for (let i = 0; i < f; i++) {
       if (i === 0) { h.asleep = true; h.state = 'unaware'; }   // first exchange is the assassination
       if (i <= 3) { h.stun = 2; playerTurn({ type: 'move', dx: 1, dy: 0 }); }
       else { h.stun = 0; h.state = 'hunt'; h.tx = G.p.x; h.ty = G.p.y; playerTurn({ type: 'wait' }); }
+      if (i < f - 1) ageFx(0.5);
     }
     anim.t = 0.9; anim.floats.length = 0; anim.shake = 0;
   },
@@ -1621,7 +1807,7 @@ const STAGES = {
     G.p.x = 22; G.p.lamp = 3;
     computeFOV();
     log('Something sleeps ahead. Your lamp is bright.', '#9fb4cc');
-    for (let i = 0; i < f; i++) playerTurn({ type: 'move', dx: 1, dy: 0 });
+    for (let i = 0; i < f; i++) { playerTurn({ type: 'move', dx: 1, dy: 0 }); if (i < f - 1) ageFx(0.5); }
     anim.t = 0.7; anim.floats.length = 0; anim.shake = 0;
   },
   stealth() {
@@ -1636,10 +1822,12 @@ const STAGES = {
   },
   sentinel() {
     stageArena(55); scene = 'play';
-    const s = makeMon('sentinel', 29, 12, true);
+    const s = makeMon('sentinel', 25, 12, true);   // dist 5 — inside its range 6
     s.state = 'hunt'; G.mons.push(s);
     G.p.lamp = 4; computeFOV();
-    monsterAct(s);
+    monsterAct(s);                // charge telegraph
+    ageFx(0.15);
+    monsterAct(s);                // the lance fires
     log('The SENTINEL fires down the corridor.', '#ffb03a');
     anim.t = 0.4;
   },
@@ -1701,11 +1889,12 @@ const STAGES = {
   },
   death() {
     newGame(66); scene = 'play';
-    G.p.hp = 3;
+    stageWalk([[1, 0], [0, 1], [1, 0], [0, 0]]);     // a real run: turns on the clock
+    G.p.hp = 9;
     const h = makeMon('warden', G.p.x + 1, G.p.y, true);
-    h.state = 'hunt'; G.mons.push(h);
+    h.state = 'hunt'; h.tx = G.p.x; h.ty = G.p.y; G.mons.push(h);
     computeFOV();
-    while (scene === 'play') monsterAttack(h);
+    for (let i = 0; i < 300 && scene === 'play'; i++) { playerTurn({ type: 'wait' }); if (scene === 'play') ageFx(0.5); }
     anim.t = 0.3; anim.deathT = 0;
   },
   deathbanner() {
@@ -1717,6 +1906,7 @@ const STAGES = {
     G.p.shard = true; G.phase = 'escape'; G.depth = 1;
     G.turn = 1487; G.p.kills = 11; G.stats.timesSpotted = 6;
     G.p.skills = { MELEE: 4, EVASION: 4, STEALTH: 3, GRIT: 2 };
+    G.p.hpMax = 22 + 6 * G.p.skills.GRIT; G.p.hp = G.p.hpMax;   // the summary must agree with the HUD
     winGame();
     anim.winT = 1.4;
   },
