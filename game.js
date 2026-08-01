@@ -323,7 +323,7 @@ function descend() {
   G.mons = placeMonsters(G.depth, rooms, vaultRoom, false);
   G.items = placeItems(G.depth, rooms, vaultRoom, false);
   G.p.xp += 50; G.p.xpTotal += 50;
-  log(`Depth ${G.depth} — ${FT(G.depth)}ft. ${G.depth === 8 ? 'The Vault. VORL sleeps.' : '+50◆ for the descent.'}`, G.depth === 8 ? '#ffd34a' : '#8be0ff');
+  log(`Depth ${G.depth} — ${FT(G.depth)}ft. ${G.depth === 8 ? 'The Vault. VORL sleeps.' : '+50 insight for the descent.'}`, G.depth === 8 ? '#ffd34a' : '#8be0ff');
   computeFOV();
   if (!HEADLESS) SFX.stairs();
 }
@@ -387,8 +387,8 @@ function float(x, y, text, color, size = 15) {
   if (HEADLESS && !SHOT) return;
   let fy = y * TS;
   // stack floaters on the same tile instead of overlapping
-  while (anim.floats.some(f => Math.abs(f.x - (x * TS + TS / 2)) < 18 && Math.abs(f.y - fy) < 16)) fy -= 16;
-  anim.floats.push({ x: x * TS + TS / 2, y: fy, text, color, size, ttl: 1.4, vy: -26 });
+  while (anim.floats.some(f => Math.abs(f.x - (x * TS + TS / 2)) < 22 && Math.abs(f.y - fy) < 22)) fy -= 22;
+  anim.floats.push({ x: x * TS + TS / 2, y: fy, text, color, size, ttl: 1.4, vy: -26, turn: G ? G.turn : 0 });
 }
 function ring(x, y, r1, color, lw = 2.5) {
   if (HEADLESS && !SHOT) return;
@@ -408,11 +408,11 @@ function ageFx(sec) {
   if (G && G.p.fxFlash) G.p.fxFlash = Math.max(0, G.p.fxFlash - sec * 2);
   if (G && G.p.fxLunge) G.p.fxLunge.t = Math.max(0, G.p.fxLunge.t - sec * 2);
 }
-function burst(x, y, color, n = 10, spd = 70) {
+function burst(x, y, color, n = 10, spd = 70, sz = 1) {
   if (HEADLESS && !SHOT) return;
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2, v = spd * (0.4 + Math.random() * 0.8);
-    anim.parts.push({ x: 0 + x * TS + TS / 2, y: 0 + y * TS + TS / 2, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ttl: 0.4 + Math.random() * 0.4, color, size: 1.5 + Math.random() * 2 });
+    anim.parts.push({ x: x * TS + TS / 2, y: y * TS + TS / 2, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ttl: 0.4 + Math.random() * 0.4, color, size: sz * (1.5 + Math.random() * 2) });
   }
 }
 
@@ -495,6 +495,13 @@ function playerAttack(m) {
   if (!res.hit) {
     log(`You miss the ${d.name}. [${res.math.attRoll}+${res.math.attMod} vs ${res.math.evRoll}${res.math.evMod < 0 ? res.math.evMod : '+' + res.math.evMod}]`, '#8aa0b8');
     float(m.x, m.y, 'miss', '#7d94ad', 13);
+    if (m.fxFlash > 0) m.fxFlash = 0;
+    if (!HEADLESS) SFX.miss();
+  } else if (res.dmg === 0) {
+    m.hp -= 0;
+    m.asleep = false; if (m.state !== 'hunt') { m.state = 'hunt'; m.tx = p.x; m.ty = p.y; }
+    log(`Your blow glances off the ${d.name}. [${res.math.dmgT} dmg − ${res.math.protT} prot]`, '#8aa0b8');
+    float(m.x, m.y, 'blocked', '#8aa0b8', 12);
     if (!HEADLESS) SFX.miss();
   } else {
     m.hp -= res.dmg;
@@ -523,10 +530,16 @@ function monsterAttack(m) {
   if (!res.hit) {
     log(`The ${d.name} misses you.`, '#8aa0b8');
     float(p.x, p.y, 'miss', '#7d94ad', 13);
+    if (p.fxFlash > 0) p.fxFlash = 0;         // a whiff clears the damage tint
   } else {
     p.hp -= res.dmg;
-    log(`The ${d.name} hits you for ${res.dmg}.${d.phase ? ' It ignores your armor.' : ''}`, '#ff8a8a');
-    float(p.x, p.y, `${res.dmg}`, '#ff5a5a', 18);
+    if (res.dmg === 0) {
+      log(`The ${d.name}'s blow is absorbed by your armor. [${res.math.dmgT} dmg − ${res.math.protT} prot]`, '#8aa0b8');
+      float(p.x, p.y, 'blocked', '#8aa0b8', 12);
+    } else {
+      log(`The ${d.name} hits you for ${res.dmg}. [${res.math.dmgT} dmg − ${res.math.protT} prot]${d.phase ? ' It ignores your armor.' : ''}`, '#ff8a8a');
+      float(p.x, p.y, `${res.dmg}`, '#ff5a5a', 18);
+    }
     burst(p.x, p.y, '#ff5a5a', 12);
     m.fxLunge = { dx: p.x - m.x, dy: p.y - m.y, t: 1 };
     p.fxFlash = 1;
@@ -541,7 +554,7 @@ function killMonster(m) {
   const d = MDEF[m.kind];
   G.p.kills++;
   G.p.xp += d.xp; G.p.xpTotal += d.xp;
-  log(`The ${d.name} is destroyed. +${d.xp}◆`, '#5dff8a');
+  log(`The ${d.name} is destroyed. +${d.xp} insight`, '#5dff8a');
   burst(m.x, m.y, d.color, 22, 110);
   G.mons.splice(G.mons.indexOf(m), 1);
 }
@@ -553,8 +566,8 @@ function firstSight() {
       const d = MDEF[m.kind];
       const xp = d.tier * 12 + 8;
       G.p.xp += xp; G.p.xpTotal += xp;
-      log(`You mark the ${d.name}. +${xp}◆ insight.`, '#8be0ff');
-      float(m.x, m.y, `+${xp}◆`, '#8be0ff', 13);
+      log(`You mark the ${d.name}. +${xp} insight.`, '#8be0ff');
+      float(m.x, m.y, `+${xp}◆`, '#ffd34a', 13);
     }
   }
 }
@@ -598,7 +611,7 @@ function pickupHere() {
 
 function quaff(i) {
   const p = G.p;
-  if (p.potions[i] <= 0) { log('That vial is empty.', '#7d94ad'); return false; }
+  if (p.potions[i] <= 0) { log('That vial is empty.', '#7d94ad'); float(p.x, p.y, 'empty', '#7d94ad', 12); return false; }
   p.potions[i]--;
   if (i === 0) { const h = dice(3, 6).t + 4; p.hp = Math.min(p.hpMax, p.hp + h); log(`MEND knits you. +${h} HP`, '#ff7a9e'); float(p.x, p.y, `+${h}`, '#5dff8a', 16); }
   if (i === 1) {
@@ -624,12 +637,12 @@ function grabShard() {
   G.phase = 'escape';
   G.pulseIn = 15; G.gazeIn = 6;
   G.p.xp += 200; G.p.xpTotal += 200;
-  log('You pry the PRIME SHARD from the crown. +200◆', '#ffd34a');
+  log('You pry the PRIME SHARD from the crown. +200 insight', '#ffd34a');
   log('VORL WAKES. RUN.', '#ff4a4a');
   // the theft has physics: gold shockwaves and a rain of sparks from the crown
-  ring(p.x, p.y, 90, '#ffd34a', 3.5); ring(p.x, p.y, 180, '#ffd34a', 2); ring(p.x, p.y, 280, '#ff8a3a', 1.5);
-  burst(p.x, p.y, '#ffd34a', 30, 130);
-  if (G.vorl) burst(G.vorl.x, G.vorl.y, '#ff6a4a', 16, 90);
+  ring(p.x, p.y, 90, '#ffd34a', 4); ring(p.x, p.y, 180, '#ffd34a', 2.5); ring(p.x, p.y, 280, '#ff8a3a', 1.5);
+  burst(p.x, p.y, '#ffd34a', 34, 140, 1.9);
+  if (G.vorl) burst(G.vorl.x, G.vorl.y, '#ff6a4a', 18, 100, 1.6);
   // the Shard knows the tower: the way out is revealed
   for (let i = 0; i < MW * MH; i++) if (WALKABLE(G.map[i])) {
     G.explored[i] = 1;
@@ -637,7 +650,7 @@ function grabShard() {
     for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]])
       if (inMap(x + ax, y + ay)) G.explored[x + ax + (y + ay) * MW] = 1;
   }
-  anim.grabT = 2.2; anim.alarmT = 1;
+  anim.grabT = 1.6; anim.alarmT = 1;
   for (const m of G.mons) { m.asleep = false; m.state = 'hunt'; m.tx = p.x; m.ty = p.y; }
   if (!HEADLESS) { SFX.alarm(); }
 }
@@ -804,7 +817,7 @@ function die(cause) {
   // the diamond shatters
   anim.frag = {
     x: G.p.x * TS + TS / 2, y: G.p.y * TS + TS / 2, t: 0,
-    parts: [0, 1, 2, 3, 4, 5].map(i => ({ vx: Math.cos(i * 1.05 + 0.4), vy: Math.sin(i * 1.05 + 0.4) - 0.6, spin: (i % 2 ? 1 : -1) * (2 + i), len: 5 + (i % 3) * 3 })),
+    parts: [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({ vx: Math.cos(i * 0.79 + 0.4), vy: Math.sin(i * 0.79 + 0.4) - 0.6, spin: (i % 2 ? 1 : -1) * (2 + i), len: 7 + (i % 3) * 4 })),
   };
   burst(G.p.x, G.p.y, '#7de8ff', 24, 120);
   ring(G.p.x, G.p.y, 70, '#7de8ff', 3);
@@ -836,7 +849,7 @@ function drawGlyph(x, y, kind, m) {
   const hitF = m && m.fxFlash > 0;
   const col = hitF ? (m.fxFlash > 0.55 ? '#ffffff' : '#ff8a8a') : asleep ? hexA(d.color, 0.45) : d.color;
   ctx.shadowColor = hitF ? '#ffffff' : col; ctx.shadowBlur = hitF ? 18 : asleep ? 4 : 12;
-  if (hitF && m.fxFlash > 0.55) ctx.scale(0.86, 0.86);
+  if (hitF && m.fxFlash > 0.55) ctx.scale(1.12, 0.84);   // directional squash: hit things flinch
   ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.fillStyle = hitF ? `rgba(255,255,255,${0.25 + m.fxFlash * 0.4})` : hexA(d.color, asleep ? 0.08 : 0.18);
   ctx.beginPath();
   if (d.glyph === 'tri') { ctx.moveTo(0, -r); ctx.lineTo(r, r * 0.8); ctx.lineTo(-r, r * 0.8); ctx.closePath(); }
@@ -981,10 +994,10 @@ function render(dt) {
   const hue = depthHue();
   const p = G.p;
 
-  // camera: player-centered, clamped to the map, snapped on floor change
+  // camera: always player-centered — the void is allowed to fill margins, the player is not allowed off-center
   const camKey = G.depth + ':' + G.phase;
-  const tcx = clamp(p.x * TS + TS / 2 - W / 2, 0, MW * TS - W);
-  const tcy = clamp(p.y * TS + TS / 2 - VH / 2, 0, MH * TS - VH);
+  const tcx = p.x * TS + TS / 2 - W / 2;
+  const tcy = p.y * TS + TS / 2 - VH / 2;
   if (anim.camFor !== camKey) { anim.camX = tcx; anim.camY = tcy; anim.camFor = camKey; }
   else { const k = Math.min(1, dt * 7); anim.camX += (tcx - anim.camX) * k; anim.camY += (tcy - anim.camY) * k; }
 
@@ -999,19 +1012,24 @@ function render(dt) {
   // map
   for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
     const idx = x + y * MW;
-    if (!G.explored[idx]) continue;
     const t = G.map[idx];
-    const vis = G.visible[idx];
-    const px = 0 + x * TS, py = 0 + y * TS;
+    // walls reveal with the floor they border — rooms read as enclosures, never gap-toothed
+    let vis = G.visible[idx];
+    if (t === T_WALL) {
+      let edge = false;
+      for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]) {
+        const n = x + ax + (y + ay) * MW;
+        if (!inMap(x + ax, y + ay) || G.map[n] === T_WALL) continue;
+        if (G.explored[n]) edge = true;
+        if (G.visible[n]) vis = 1;
+      }
+      if (!edge) continue;
+    } else if (!G.explored[idx]) continue;
+    const px = x * TS, py = y * TS;
     const dd = Math.hypot(x - p.x, y - p.y);
     const lightR = visRadius();
     const lum = vis ? clamp(1 - dd / (lightR + 1), 0.12, 1) : 0;
     if (t === T_WALL) {
-      // draw only walls bordering explored floor
-      let edge = false;
-      for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]])
-        if (inMap(x + ax, y + ay) && G.explored[x + ax + (y + ay) * MW] && G.map[x + ax + (y + ay) * MW] !== T_WALL) { edge = true; break; }
-      if (!edge) continue;
       // value ladder: walls solid, clearly above floor, with a lit top edge
       ctx.fillStyle = vis ? hsl(hue, 45, 15 + lum * 13) : hsl(222, 20, 9);
       ctx.fillRect(px, py, TS, TS);
@@ -1062,39 +1080,48 @@ function render(dt) {
   ctx.fillRect(0, 0, MW * TS, MH * TS);
   ctx.restore();
 
-  drawVorl();
-  for (const it of G.items) if (G.visible[it.x + it.y * MW]) drawItem(it);
-  for (const m of G.mons) if (G.visible[m.x + m.y * MW]) drawGlyph(m.x, m.y, m.kind, m);
-  if (scene !== 'dead') drawPlayer();          // when dead, the shatter fragments are the corpse
-
-  // beams: charge = thin dashed telegraph; fire = 3-layer lance
+  // beams under actors: the shooter's silhouette stays whole. Segment clamped muzzle→target edge.
   for (const b of anim.beams) {
-    const x0 = b.x0 * TS + TS / 2, y0 = b.y0 * TS + TS / 2, x1 = b.x1 * TS + TS / 2, y1 = b.y1 * TS + TS / 2;
+    let x0 = b.x0 * TS + TS / 2, y0 = b.y0 * TS + TS / 2, x1 = b.x1 * TS + TS / 2, y1 = b.y1 * TS + TS / 2;
+    const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+    const ux = (x1 - x0) / len, uy = (y1 - y0) / len;
+    x0 += ux * TS * 0.45; y0 += uy * TS * 0.45;
+    x1 -= ux * TS * 0.32; y1 -= uy * TS * 0.32;
     const a = clamp(b.ttl * 4, 0, 1);
     ctx.save();
+    ctx.lineCap = 'round';
     if (b.charge) {
       ctx.setLineDash([6, 8]);
       ctx.strokeStyle = hexA(b.color, a * 0.45); ctx.lineWidth = 2; ctx.shadowColor = b.color; ctx.shadowBlur = 8;
       ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
     } else {
-      ctx.shadowColor = b.color; ctx.shadowBlur = 24;
-      ctx.strokeStyle = hexA(b.color, a * 0.35); ctx.lineWidth = 8;
+      ctx.shadowColor = b.color; ctx.shadowBlur = 14;
+      ctx.strokeStyle = hexA(b.color, a * 0.25); ctx.lineWidth = 13;
       ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
-      ctx.strokeStyle = hexA(b.color, a); ctx.lineWidth = 3.5;
+      ctx.strokeStyle = hexA(b.color, a * 0.65); ctx.lineWidth = 5;
       ctx.stroke();
-      ctx.strokeStyle = `rgba(255,255,255,${a})`; ctx.lineWidth = 1.2; ctx.shadowBlur = 12;
+      ctx.strokeStyle = `rgba(255,255,255,${a})`; ctx.lineWidth = 1.6; ctx.shadowBlur = 8;
       ctx.stroke();
-      // impact sparks
-      ctx.fillStyle = hexA(b.color, a);
-      for (let i = 0; i < 5; i++) {
-        const sa = i * 1.26 + b.ttl * 7;
-        ctx.fillRect(x1 + Math.cos(sa) * 10 * (1 - a + 0.4) - 1.5, y1 + Math.sin(sa) * 10 * (1 - a + 0.4) - 1.5, 3, 3);
+      // impact: a cone of sparks kicked back along the beam
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = hexA(b.color, a); ctx.lineWidth = 1.6;
+      for (let i = 0; i < 9; i++) {
+        const spread = (i / 8 - 0.5) * 2.1;
+        const sx = -ux * Math.cos(spread) + -uy * -Math.sin(spread);
+        const sy = -uy * Math.cos(spread) + -ux * Math.sin(spread);
+        const sl = 7 + (i * 37 % 9);
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 + sx * sl, y1 + sy * sl); ctx.stroke();
       }
     }
     ctx.restore();
     b.ttl -= dt;
   }
   anim.beams = anim.beams.filter(b => b.ttl > 0);
+
+  drawVorl();
+  for (const it of G.items) if (G.visible[it.x + it.y * MW]) drawItem(it);
+  for (const m of G.mons) if (G.visible[m.x + m.y * MW]) drawGlyph(m.x, m.y, m.kind, m);
+  if (scene !== 'dead') drawPlayer();          // when dead, the shatter fragments are the corpse
 
   // expanding impact rings
   for (const r of anim.rings) {
@@ -1107,16 +1134,19 @@ function render(dt) {
   }
   anim.rings = anim.rings.filter(r => r.t < 1);
 
-  // death shatter: the diamond breaks apart
+  // death shatter: recognizable shards of the diamond, flying apart
   if (anim.frag) {
     const f = anim.frag;
     f.t += dt;
+    const ft = Math.min(f.t, 1.1);
     const a = Math.max(0.25, 1 - f.t * 0.8);
-    ctx.strokeStyle = hexA('#7de8ff', a); ctx.lineWidth = 2.2; ctx.shadowColor = '#7de8ff'; ctx.shadowBlur = 12;
+    ctx.strokeStyle = hexA('#7de8ff', a); ctx.fillStyle = hexA('#bfe8ff', a * 0.35);
+    ctx.lineWidth = 2; ctx.shadowColor = '#7de8ff'; ctx.shadowBlur = 12;
     for (const s of f.parts) {
-      const px = f.x + s.vx * Math.min(f.t, 1.1) * 46, py = f.y + s.vy * Math.min(f.t, 1.1) * 46 + 22 * Math.min(f.t, 1.1) * Math.min(f.t, 1.1);
+      const px = f.x + s.vx * ft * 52, py = f.y + s.vy * ft * 52 + 26 * ft * ft;
       ctx.save(); ctx.translate(px, py); ctx.rotate(s.spin * f.t);
-      ctx.beginPath(); ctx.moveTo(-s.len, 0); ctx.lineTo(s.len, 0); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, -s.len); ctx.lineTo(s.len * 0.6, s.len * 0.5); ctx.lineTo(-s.len * 0.6, s.len * 0.5); ctx.closePath();
+      ctx.fill(); ctx.stroke();
       ctx.restore();
     }
     ctx.shadowBlur = 0;
@@ -1144,6 +1174,8 @@ function render(dt) {
     ctx.fillRect(pt.x, pt.y, pt.size, pt.size);
   }
   anim.parts = anim.parts.filter(p => p.ttl > 0);
+  // floaters die with their moment: two turns later they are litter, not feedback
+  anim.floats = anim.floats.filter(f => G.turn - f.turn <= 1);
   for (const f of anim.floats) {
     f.y += f.vy * dt; f.ttl -= dt;
     ctx.font = `bold ${f.size}px ${MONO}`; ctx.textAlign = 'center';
@@ -1221,22 +1253,28 @@ function renderHUD() {
   ctx.fillStyle = '#a89a3c'; ctx.fillText('PWR', 16, 40);
   bar(42, 30, 150, 12, p.power / p.powerMax, p.power < 200 ? '#ff8a5a' : '#a89a3c');
   ctx.fillStyle = '#cfd9e8'; ctx.fillText(`${p.power}/${p.powerMax}`, 200, 40);
-  ctx.fillStyle = '#7d94ad'; ctx.fillText('LAMP', 292, 40);
+  // pips are the lamp SETTING (keyed to [L]), not a fuel gauge — the bar to the left is the fuel
+  ctx.fillStyle = '#7d94ad'; ctx.fillText('[L]LAMP', 292, 40);
   for (let i = 0; i < 4; i++) {
     ctx.fillStyle = p.power > 0 && i < p.lamp ? '#a89a3c' : '#232840';
-    ctx.fillRect(338 + i * 10, 31, 7, 10);
+    ctx.fillRect(360 + i * 10, 31, 7, 10);
   }
   // depth / phase
   ctx.textAlign = 'center';
   ctx.font = `bold 17px ${MONO}`;
   const phTxt = scene === 'won' ? 'SURFACE' : G.phase === 'escape' ? `ESCAPE — ${FT(G.depth)}FT TO CLIMB` : `DEPTH ${G.depth} · ${FT(G.depth)}FT`;
-  ctx.shadowColor = G.phase === 'escape' ? '#ff4a4a' : hsl(depthHue(), 90, 60); ctx.shadowBlur = 10;
-  ctx.fillStyle = G.phase === 'escape' ? '#ff6a6a' : '#e8fbff';
+  ctx.shadowColor = scene === 'won' ? '#ffd34a' : G.phase === 'escape' ? '#ff4a4a' : hsl(depthHue(), 90, 60); ctx.shadowBlur = 10;
+  ctx.fillStyle = scene === 'won' ? '#ffd34a' : G.phase === 'escape' ? '#ff6a6a' : '#e8fbff';
   ctx.fillText(phTxt, W / 2, 24);
   ctx.shadowBlur = 0;
   ctx.font = `11px ${MONO}`; ctx.fillStyle = '#7d94ad';
   const protTxt = ARMORS[p.armor].prot[0] ? ARMORS[p.armor].prot.join('d') : '—';
-  ctx.fillText(`${WEAPONS[p.weapon].name} ${WEAPONS[p.weapon].dmg.join('d')} · ${ARMORS[p.armor].name} ${protTxt}${p.shard ? ' · ◆SHARD' : ''}${p.veil > 0 ? ` · VEIL ${p.veil}` : ''}`, W / 2, 41);
+  ctx.fillText(`${WEAPONS[p.weapon].name} ${WEAPONS[p.weapon].dmg.join('d')} · ${ARMORS[p.armor].name} ${protTxt}${p.veil > 0 ? ` · VEIL ${p.veil}` : ''}`, W / 2, 41);
+  if (p.shard) {
+    // the shard indicator wears the shard's own gold
+    ctx.font = `bold 11px ${MONO}`; ctx.fillStyle = '#ffd34a';
+    ctx.fillText('◆ SHARD', W / 2, 12);
+  }
   // right: insight + potions — insight wears gold, never the player's cyan
   ctx.textAlign = 'right';
   ctx.font = `bold 14px ${MONO}`; ctx.fillStyle = '#ffd34a';
@@ -1296,7 +1334,7 @@ function renderSkills() {
     const can = p.xp >= cost;
     ctx.fillStyle = SKILL_COLOR[i];
     ctx.font = `bold 14px ${MONO}`;
-    ctx.fillText(`[${i + 1}] ${k}`, x + 24, yy);
+    ctx.fillText(`[${i + 1}]${k}`, x + 24, yy);
     ctx.fillStyle = '#e8fbff';
     ctx.fillText(`${cur}`, x + 190, yy);
     ctx.fillStyle = can ? '#5dff8a' : '#3a4258';
@@ -1308,7 +1346,7 @@ function renderSkills() {
     ctx.fillText(desc[i], x + 24, yy + 14);
   }
   ctx.font = `11px ${MONO}`; ctx.textAlign = 'center'; ctx.fillStyle = '#7d94ad';
-  ctx.fillText('press 1–4 to buy · S or ESC to close', x + w / 2, y + h - 14);
+  ctx.fillText('[1-4]BUY · [S]/[ESC]CLOSE', x + w / 2, y + h - 14);
 }
 
 function renderHelp() {
@@ -1353,7 +1391,7 @@ function renderMathPanel() {
     ctx.fillStyle = '#e8fbff';
     ctx.fillText(`DMG ${m.dmgDice[0]}d${m.dmgDice[1]}[${m.dmgRolls.join(',')}] = ${m.dmgT}   −   PROT ${m.protDice[0]}d${m.protDice[1]}[${m.protRolls.join(',') || '—'}] = ${m.protT}`, x + 14, y + 90);
     ctx.font = `bold 14px ${MONO}`;
-    if (m.dmg === 0) { ctx.fillStyle = '#8aa0b8'; ctx.fillText('ABSORBED — 0', x + 14, y + 112); }
+    if (m.dmg === 0) { ctx.fillStyle = '#8aa0b8'; ctx.fillText(`FINAL 0 — all ${m.dmgT} absorbed`, x + 14, y + 112); }
     else { ctx.fillStyle = enemyAtk ? '#ff6a6a' : '#ffd34a'; ctx.fillText(`FINAL ${m.dmg}`, x + 14, y + 112); }
   }
   ctx.font = `10px ${MONO}`; ctx.fillStyle = '#6a7a90';
@@ -1407,13 +1445,13 @@ function renderTitle() {
   const sy = (t * 60) % H;
   ctx.fillStyle = 'rgba(139,224,255,0.05)';
   ctx.fillRect(0, sy, W, 3);
-  // scrims: one smooth pool of dark behind each text group
+  // scrims: one smooth pool of dark behind each text group — full-canvas fills so gradients die naturally, no seams
   for (const [cy, ch] of [[240, 260], [400, 90], [500, 60], [560, 40], [640, 40]]) {
     const g = ctx.createRadialGradient(W / 2, cy, 60, W / 2, cy, ch + 320);
     g.addColorStop(0, 'rgba(3,2,8,0.78)');
     g.addColorStop(1, 'rgba(3,2,8,0)');
     ctx.fillStyle = g;
-    ctx.fillRect(0, cy - ch - 80, W, (ch + 80) * 2);
+    ctx.fillRect(0, 0, W, H);
   }
   ctx.restore();
 
@@ -1452,14 +1490,14 @@ function renderTitle() {
     ctx.shadowBlur = 0;
   }
   ctx.font = `12px ${MONO}`; ctx.fillStyle = '#8496ac';
-  ctx.fillText('arrows/WASD move · bump to fight · L lamp · 1-3 vials · S skills · ? help', W / 2, 560);
+  ctx.fillText('[WASD/↑↓←→]MOVE · BUMP TO FIGHT · [L]LAMP · [1-3]VIALS · [S]SKILLS · [?]HELP', W / 2, 560);
   ctx.fillStyle = '#68788e';
   ctx.fillText('zero assets — every pixel and sound from code · AGPL', W / 2, 640);
 }
 
 function renderDeath(dt) {
   anim.deathT = Math.min(1.6, anim.deathT + dt);
-  const a = clamp(anim.deathT / 1.2, 0, 0.86);
+  const a = clamp(anim.deathT / 1.2, 0, 0.92);
   ctx.fillStyle = `rgba(5,2,8,${a})`;
   ctx.fillRect(0, 0, W, H);
   if (anim.deathT < 0.5) return;
@@ -1479,19 +1517,28 @@ function renderDeath(dt) {
 
 function renderWin(dt) {
   anim.winT = Math.min(2, anim.winT + dt);
-  const a = clamp(anim.winT / 1.2, 0, 0.9);
+  const a = clamp(anim.winT / 1.2, 0, 0.94);
   ctx.fillStyle = `rgba(8,6,2,${a})`;
   ctx.fillRect(0, 0, W, H);
-  // rising motes
-  if (Math.random() < 0.3) anim.parts.push({ x: Math.random() * W, y: H, vx: 0, vy: -40 - Math.random() * 60, ttl: 3, color: '#ffd34a', size: 2 });
+  // rising gold motes, above the dim — deterministic so stills always celebrate
+  ctx.save();
+  for (let i = 0; i < 42; i++) {
+    const mx = (i * 137.3 + 40) % W;
+    const my = H - ((anim.t * (30 + (i % 5) * 12) + i * 83) % (H + 60)) + 30;
+    const ma = 0.12 + 0.3 * ((i * 61 % 17) / 17) * (0.6 + 0.4 * Math.sin(anim.t * 2 + i));
+    ctx.fillStyle = `rgba(255,211,74,${clamp(ma, 0, 0.45)})`;
+    const sz = 1.5 + (i % 3);
+    ctx.fillRect(mx, my, sz, sz);
+  }
+  ctx.restore();
   ctx.textAlign = 'center';
   ctx.font = `bold 60px ${MONO}`;
   ctx.shadowColor = '#ffd34a'; ctx.shadowBlur = 36;
   ctx.fillStyle = '#ffe9a8';
   ctx.fillText('OUT WITH THE SHARD', W / 2, 270);
-  // the object of the whole heist, held up to the light
+  // the object of the whole heist, held up to the light — clear of the prompt below
   ctx.save();
-  ctx.translate(W / 2, 470 + Math.sin(anim.t * 2) * 5);
+  ctx.translate(W / 2, 160 + Math.sin(anim.t * 2) * 5);
   const pl = 1 + 0.06 * Math.sin(anim.t * 3);
   ctx.scale(pl * 2.2, pl * 2.2);
   ctx.shadowColor = '#ffd34a'; ctx.shadowBlur = 40;
@@ -1796,7 +1843,7 @@ const STAGES = {
       else { h.stun = 0; h.state = 'hunt'; h.tx = G.p.x; h.ty = G.p.y; playerTurn({ type: 'wait' }); }
       if (i < f - 1) ageFx(0.5);
     }
-    anim.t = 0.9; anim.floats.length = 0; anim.shake = 0;
+    anim.t = 0.9; anim.shake = 0;
   },
   alert(f) {
     stageArena(41);
@@ -1808,7 +1855,7 @@ const STAGES = {
     computeFOV();
     log('Something sleeps ahead. Your lamp is bright.', '#9fb4cc');
     for (let i = 0; i < f; i++) { playerTurn({ type: 'move', dx: 1, dy: 0 }); if (i < f - 1) ageFx(0.5); }
-    anim.t = 0.7; anim.floats.length = 0; anim.shake = 0;
+    anim.t = 0.7; anim.shake = 0;
   },
   stealth() {
     newGame(23); scene = 'play';
@@ -1844,6 +1891,7 @@ const STAGES = {
     // stand before the dais
     for (let i = 0; i < MW * MH; i++) if (G.map[i] === T_DAIS) { G.p.x = i % MW; G.p.y = ((i / MW) | 0) + 2; break; }
     G.p.lamp = 2; G.p.weapon = 2; G.p.armor = 2;
+    stageWalk([[0, 0], [0, 0], [0, 0]]);       // the clock has been running the whole descent
     computeFOV();
     log('The Vault. VORL sleeps on its throne of light.', '#ffd34a');
     anim.t = 1.8;
@@ -1874,12 +1922,15 @@ const STAGES = {
     computeFOV();
     log('The Shard sings. They hear.', '#ff8a5a');
     log('HUNTERS. Three floors to daylight.', '#ff4a4a');
+    ageFx(1.2);                    // the grab was floors ago: its banner and floaters are gone
+    anim.grabT = 0;
     anim.t = 1.1; anim.alarmT = 0.7;
   },
   flash() {
     STAGES.pursuit();
+    G.p.potions = [1, 1, 1];       // the shot documents a detonation, not an empty pocket
     playerTurn({ type: 'potion', i: 2 });
-    anim.t = 0.15; anim.flashT = 0.35;
+    anim.t = 0.15; anim.flashT = 0.75;
   },
   skills() {
     newGame(17); scene = 'play';
@@ -1895,10 +1946,12 @@ const STAGES = {
     h.state = 'hunt'; h.tx = G.p.x; h.ty = G.p.y; G.mons.push(h);
     computeFOV();
     for (let i = 0; i < 300 && scene === 'play'; i++) { playerTurn({ type: 'wait' }); if (scene === 'play') ageFx(0.5); }
+    if (anim.frag) anim.frag.t = 0.4;          // catch the shatter mid-flight, not at t=0
     anim.t = 0.3; anim.deathT = 0;
   },
   deathbanner() {
     STAGES.death();
+    if (anim.frag) anim.frag.t = 0.9;
     anim.deathT = 1.5;
   },
   win() {
