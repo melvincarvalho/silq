@@ -40,6 +40,15 @@ And the inverted second act: taking the Shard is not the win. The tower
 comes awake, the Shard sings your position to hunter packs every few dozen
 turns, and eight floors of climb stand between you and daylight.
 
+The tower has two registers. Depths 1–4 are the **Concourse** — slab walls,
+circuit-dot floors, drones and hounds. Depths 5–8 are the **Choir** —
+arched wax architecture where the CHORISTER's hymn drains your *lamp*
+instead of your blood and the THURIBLE bursts into sight-blocking incense
+when killed. A depth-pitched ambient drone sinks with you (the Choir hums a
+stranger interval; the escape act adds an alarm pulse), and the title
+screen offers a **daily heist** — one shared seed per UTC day, results and
+clear count kept in local storage.
+
 ## The experiment
 
 Same pipeline as the first four games — one owner builds, deterministic
@@ -119,6 +128,10 @@ not post-fix.
 - **Careful-bot wins are high-kill, high-spot** (24–66 kills, 41–93 times
   seen): the telemetry proves care pays, not that a pure ghost run is viable.
 - Fixed 51×24 floors, 8 depths, no item identification, no artefacts.
+- The 1.1 additions (the Choir, ambient audio, the daily heist) shipped
+  after the critic panel's final scores — the bots re-verified balance
+  (careful 11/15, reckless 0/15) but no critic has re-scored the visuals
+  or audio. The scores table predates them.
 
 ## Process notes
 

@@ -81,6 +81,59 @@ const SFX = {
   flash() { noiseHit(0.3, 0.3); tone(1500, 0.25, 'sine', 0.12, 3000); },
 };
 
+// ---------- ambient bed ----------
+// a depth-pitched drone: deeper floors sit lower; the Choir hums a stranger interval;
+// the escape act adds a pulsing alarm bass. All from four oscillators.
+let amb = null;
+function ambientStart() {
+  if (amb || HEADLESS) return;
+  const a = audio(); if (!a) return;
+  const g = a.createGain(); g.gain.value = 0; g.connect(master);
+  const o1 = a.createOscillator(); o1.type = 'sine';
+  const o2 = a.createOscillator(); o2.type = 'triangle';
+  const g2 = a.createGain(); g2.gain.value = 0.35;
+  o1.connect(g); o2.connect(g2); g2.connect(g);
+  const lfo = a.createOscillator(); lfo.frequency.value = 0.08;
+  const lfoG = a.createGain(); lfoG.gain.value = 0.012;
+  lfo.connect(lfoG); lfoG.connect(g.gain);
+  const p = a.createOscillator(); p.type = 'square';
+  const pg = a.createGain(); pg.gain.value = 0;
+  const plfo = a.createOscillator(); plfo.type = 'square'; plfo.frequency.value = 2.4;
+  const plfoG = a.createGain(); plfoG.gain.value = 0;
+  plfo.connect(plfoG); plfoG.connect(pg.gain);
+  p.connect(pg); pg.connect(master);
+  o1.start(); o2.start(); lfo.start(); p.start(); plfo.start();
+  amb = { g, o1, o2, p, plfoG };
+  ambientTune();
+}
+function ambientTune() {
+  if (!amb || !G || !actx) return;
+  const t = actx.currentTime;
+  const root = 82 * Math.pow(2, -G.depth / 16);
+  amb.o1.frequency.exponentialRampToValueAtTime(Math.max(30, root), t + 1.2);
+  amb.o2.frequency.exponentialRampToValueAtTime(Math.max(45, root * (BIOME(G.depth) ? 1.68 : 1.5)), t + 1.2);
+  amb.g.gain.linearRampToValueAtTime(0.035, t + 1);
+  amb.p.frequency.setValueAtTime(Math.max(35, root * 0.5), t);
+  amb.plfoG.gain.linearRampToValueAtTime(G.phase === 'escape' ? 0.03 : 0, t + 0.6);
+}
+function ambientStop() {
+  if (!amb || !actx) return;
+  amb.g.gain.linearRampToValueAtTime(0, actx.currentTime + 1.5);
+  amb.plfoG.gain.linearRampToValueAtTime(0, actx.currentTime + 0.5);
+}
+
+// ---------- daily seed ----------
+function dailyKey() { const d = new Date(); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`; }
+function dailySeed() { const s = dailyKey(); let h = 2166136261; for (const c of s) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; } return (h >>> 0) || 1; }
+function dailyLog() { try { return JSON.parse(localStorage.getItem('silqDaily') || '{}'); } catch (e) { return {}; } }
+function dailyRecord(result) {
+  if (!G || !G.daily) return;
+  try {
+    const d = dailyLog();
+    if (!d[dailyKey()]) { d[dailyKey()] = { r: result, ft: FT(G.depth), turns: G.turn }; localStorage.setItem('silqDaily', JSON.stringify(d)); }
+  } catch (e) { }
+}
+
 // ---------- tiles ----------
 const T_WALL = 0, T_FLOOR = 1, T_DOOR = 2, T_DOOR_OPEN = 3, T_DOWN = 4, T_UP = 5, T_DAIS = 6;
 const WALKABLE = t => t !== T_WALL;
@@ -100,7 +153,12 @@ const MDEF = {
   wraith:  { name: 'WRAITH',     hp: 7,  melee: 4, ev: 5, per: 4, spd: 70,  dmg: [1, 7], prot: [0, 0], tier: 4, xp: 25, color: '#bfe8ff', sleeps: false, glyph: 'arc', phase: true },
   warden:  { name: 'WARDEN',     hp: 17, melee: 5, ev: 1, per: 3, spd: 90,  dmg: [2, 6], prot: [1, 4], tier: 5, xp: 40, color: '#ff5ad0', sleeps: true,  glyph: 'sq' },
   hunter:  { name: 'HUNTER',     hp: 9,  melee: 5, ev: 4, per: 6, spd: 120, dmg: [2, 4], prot: [1, 3], tier: 9, xp: 20, color: '#ff4a4a', sleeps: false, glyph: 'dart' },
+  // the Choir (depths 5-8): VORL's liturgy made flesh
+  chorist: { name: 'CHORISTER',  hp: 8,  melee: 3, ev: 2, per: 4, spd: 100, dmg: [1, 4], prot: [1, 3], tier: 5, xp: 25, color: '#ffcf6a', sleeps: false, glyph: 'bell', turret: true, drains: true },
+  thurible:{ name: 'THURIBLE',   hp: 6,  melee: 3, ev: 3, per: 3, spd: 110, dmg: [1, 6], prot: [0, 0], tier: 6, xp: 20, color: '#9adfc0', sleeps: false, glyph: 'orb', smokes: true },
 };
+
+const BIOME = d => (d >= 5 && d <= 8 ? 1 : 0);   // 0 = the Concourse, 1 = the Choir
 
 // ---------- items ----------
 const WEAPONS = [
@@ -301,6 +359,7 @@ function descend() {
   const ascent = false;
   const { map, rooms, vaultRoom } = genFloor(G.depth, ascent);
   G.map = map; G.explored = new Uint8Array(MW * MH); G.visible = new Uint8Array(MW * MH);
+  G.smoke = new Uint8Array(MW * MH);
   // entry: player appears in first non-vault room
   const entry = rooms[vaultRoom ? 1 : 0];
   G.p.x = entry.x + (entry.w >> 1); G.p.y = entry.y + (entry.h >> 1);
@@ -325,6 +384,8 @@ function descend() {
   G.items = placeItems(G.depth, rooms, vaultRoom, false);
   G.p.xp += 50; G.p.xpTotal += 50;
   log(`Depth ${G.depth} — ${FT(G.depth)}ft. ${G.depth === 8 ? 'The Vault. VORL sleeps.' : '+50 insight for the descent.'}`, G.depth === 8 ? '#ffd34a' : '#8be0ff');
+  if (G.depth === 5) log('The Choir. The walls hum hymns to the sleeper below.', '#ffcf6a');
+  ambientTune();
   computeFOV();
   if (!HEADLESS) SFX.stairs();
 }
@@ -334,6 +395,7 @@ function ascendFloor() {
   if (G.depth === 0) { winGame(); return; }
   const { map, rooms } = genFloor(G.depth, true);
   G.map = map; G.explored = new Uint8Array(MW * MH); G.visible = new Uint8Array(MW * MH);
+  G.smoke = new Uint8Array(MW * MH);
   const entry = rooms[0];
   G.p.x = entry.x + (entry.w >> 1); G.p.y = entry.y + (entry.h >> 1);
   const up = tileAtDist(G.map, G.p.x, G.p.y, 20, 28, null);
@@ -349,6 +411,7 @@ function ascendFloor() {
   G.mons = placeMonsters(G.depth, rooms, null, true);
   G.items = placeItems(G.depth, rooms, null, true);
   log(`Depth ${G.depth} — climbing. The tower is awake.`, '#ff8a8a');
+  ambientTune();
   computeFOV();
   if (!HEADLESS) SFX.stairs();
 }
@@ -359,7 +422,7 @@ function los(x0, y0, x1, y1) {
   const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
   let err = dx - dy, x = x0, y = y0;
   while (!(x === x1 && y === y1)) {
-    if (!(x === x0 && y === y0) && OPAQUE(at(x, y))) return false;
+    if (!(x === x0 && y === y0) && (OPAQUE(at(x, y)) || (G.smoke && G.smoke[x + y * MW] > 0))) return false;
     const e2 = 2 * err;
     if (e2 > -dy) { err -= dy; x += sx; }
     if (e2 < dx) { err += dx; y += sy; }
@@ -558,6 +621,13 @@ function killMonster(m) {
   G.p.xp += d.xp; G.p.xpTotal += d.xp;
   log(`The ${d.name} is destroyed. +${d.xp} insight`, '#5dff8a');
   burst(m.x, m.y, d.color, 22, 110);
+  if (d.smokes) {
+    // the censer bursts: incense smoke blocks all sight lines for a while
+    for (let y = Math.max(0, m.y - 1); y <= Math.min(MH - 1, m.y + 1); y++)
+      for (let x = Math.max(0, m.x - 1); x <= Math.min(MW - 1, m.x + 1); x++)
+        if (WALKABLE(at(x, y))) G.smoke[x + y * MW] = 9;
+    log('The censer bursts — incense swallows the light.', '#9adfc0');
+  }
   G.mons.splice(G.mons.indexOf(m), 1);
 }
 
@@ -654,6 +724,7 @@ function grabShard() {
   }
   anim.grabT = 1.6; anim.alarmT = 1;
   for (const m of G.mons) { m.asleep = false; m.state = 'hunt'; m.tx = p.x; m.ty = p.y; }
+  ambientTune();
   if (!HEADLESS) { SFX.alarm(); }
 }
 
@@ -700,6 +771,7 @@ function playerTurn(action) {
   if (p.power > 0) p.power = Math.max(0, p.power - p.lamp);
   else if (G.turn % 5 === 0) { p.hp--; if (G.turn % 15 === 0) log('Your lamp is dead. The dark gnaws.', '#ff8a8a'); if (p.hp <= 0) { die('claimed by the dark'); return true; } }
   if (G.turn % 8 === 0 && p.hp < p.hpMax) p.hp++;
+  for (let i = 0; i < MW * MH; i++) if (G.smoke[i] > 0) G.smoke[i]--;
 
   // vault gaze: linger in VORL's sight after the grab and it burns you
   if (G.vorl && p.shard && dist(p.x, p.y, G.vorl.x, G.vorl.y) <= 7 && los(G.vorl.x, G.vorl.y, p.x, p.y)) {
@@ -776,12 +848,21 @@ function monsterAct(m) {
       if (!m.charge) {
         m.charge = 1;
         anim.beams.push({ x0: m.x, y0: m.y, x1: G.p.x, y1: G.p.y, ttl: 0.4, color: d.color, charge: true });
-        if (G.visible[m.x + m.y * MW]) log('The SENTINEL charges its lance.', '#ffb03a');
+        if (G.visible[m.x + m.y * MW]) log(`The ${d.name} ${d.drains ? 'draws breath for a hymn' : 'charges its lance'}.`, d.drains ? '#ffcf6a' : '#ffb03a');
       } else {
         m.charge = 0;
         anim.beams.push({ x0: m.x, y0: m.y, x1: G.p.x, y1: G.p.y, ttl: 0.25, color: d.color });
         if (!HEADLESS) SFX.bolt();
-        monsterAttack(m);
+        if (d.drains) {
+          // the hymn attacks the lamp, not the flesh — the food clock made audible
+          const amt = Math.min(G.p.power, 25 + ri(35));
+          G.p.power -= amt;
+          makeNoise(m.x, m.y, 7);
+          if (amt > 0) {
+            log(`The CHORISTER's hymn saps your lamp. −${amt}⚡`, '#ffcf6a');
+            float(G.p.x, G.p.y, `−${amt}⚡`, '#ffcf6a', 14);
+          } else monsterAttack(m);      // nothing left to sap: it bites instead
+        } else monsterAttack(m);
       }
     } else m.charge = 0;
     return;
@@ -814,6 +895,8 @@ function monstersTurn() {
 function die(cause) {
   G.p.deaths = cause;
   G.deathTurn = G.turn;
+  dailyRecord('DEATH');
+  ambientStop();
   scene = 'dead';
   anim.deathT = 0;
   // only this turn's fatal beat survives onto the death frame
@@ -829,6 +912,8 @@ function die(cause) {
   if (!HEADLESS) SFX.die();
 }
 function winGame() {
+  dailyRecord('WIN');
+  ambientStop();
   scene = 'won';
   anim.winT = 0;
   log('Daylight. You are out, and the Shard is yours.', '#ffd34a');
@@ -863,6 +948,8 @@ function drawGlyph(x, y, kind, m) {
   else if (d.glyph === 'arc') { ctx.arc(0, 0, r, Math.PI * 0.15, Math.PI * 0.85, true); ctx.moveTo(-r * 0.5, r * 0.5); ctx.lineTo(-r * 0.5, r * 0.9); ctx.moveTo(r * 0.5, r * 0.5); ctx.lineTo(r * 0.5, r * 0.9); }
   else if (d.glyph === 'sq') { ctx.rect(-r * 0.85, -r * 0.85, r * 1.7, r * 1.7); }
   else if (d.glyph === 'dart') { ctx.moveTo(0, -r); ctx.lineTo(r * 0.7, r); ctx.lineTo(0, r * 0.45); ctx.lineTo(-r * 0.7, r); ctx.closePath(); }
+  else if (d.glyph === 'bell') { ctx.moveTo(-r * 0.8, r * 0.6); ctx.quadraticCurveTo(-r * 0.8, -r, 0, -r); ctx.quadraticCurveTo(r * 0.8, -r, r * 0.8, r * 0.6); ctx.lineTo(-r * 0.8, r * 0.6); ctx.closePath(); ctx.moveTo(0, r * 0.6); ctx.lineTo(0, r * 0.95); }
+  else if (d.glyph === 'orb') { ctx.arc(0, 0, r * 0.8, 0, Math.PI * 2); ctx.moveTo(-r * 0.5, -r * 0.2); ctx.lineTo(r * 0.5, -r * 0.2); ctx.moveTo(-r * 0.5, r * 0.2); ctx.lineTo(r * 0.5, r * 0.2); ctx.moveTo(0, -r * 0.8); ctx.lineTo(0, -r * 1.1); }
   ctx.fill(); ctx.stroke();
   // eye / core
   if (!asleep) {
@@ -1037,20 +1124,38 @@ function render(dt) {
     if (G.vorl && G.vaultRect && x >= G.vaultRect.x - 1 && x <= G.vaultRect.x + G.vaultRect.w && y >= G.vaultRect.y - 1 && y <= G.vaultRect.y + G.vaultRect.h) {
       vis = 1; lum = Math.max(lum, 0.3);
     }
+    const choir = BIOME(G.depth) === 1;
     if (t === T_WALL) {
       // value ladder: walls solid, clearly above floor, with a lit top edge
-      ctx.fillStyle = vis ? hsl(hue, 45, 15 + lum * 13) : hsl(222, 20, 9);
-      ctx.fillRect(px, py, TS, TS);
-      ctx.fillStyle = vis ? hsl(hue, 85, 38 + lum * 28, 0.75 + lum * 0.25) : hsl(222, 25, 17, 0.55);
-      ctx.fillRect(px, py, TS, 2.5);
-      ctx.strokeStyle = vis ? hsl(hue, 80, 30 + lum * 26, 0.35 + lum * 0.3) : hsl(222, 25, 14, 0.3);
-      ctx.lineWidth = 1;
-      ctx.strokeRect(px + 1, py + 1, TS - 2, TS - 2);
+      // the Choir builds in arches and wax; the Concourse in slabs and circuits
+      ctx.fillStyle = vis ? hsl(hue, choir ? 55 : 45, 15 + lum * 13) : hsl(222, 20, 9);
+      if (choir && ctx.roundRect) {
+        ctx.beginPath(); ctx.roundRect(px + 0.5, py + 0.5, TS - 1, TS - 1, [8, 8, 2, 2]); ctx.fill();
+        ctx.strokeStyle = vis ? hsl(hue, 85, 38 + lum * 28, 0.6 + lum * 0.3) : hsl(222, 25, 15, 0.4);
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+      } else {
+        ctx.fillRect(px, py, TS, TS);
+        ctx.fillStyle = vis ? hsl(hue, 85, 38 + lum * 28, 0.75 + lum * 0.25) : hsl(222, 25, 17, 0.55);
+        ctx.fillRect(px, py, TS, 2.5);
+        ctx.strokeStyle = vis ? hsl(hue, 80, 30 + lum * 26, 0.35 + lum * 0.3) : hsl(222, 25, 14, 0.3);
+        ctx.lineWidth = 1;
+        ctx.strokeRect(px + 1, py + 1, TS - 2, TS - 2);
+      }
     } else {
       ctx.fillStyle = vis ? hsl(hue, 42, 8.5 + lum * 8.5) : hsl(225, 16, 5.5);
       ctx.fillRect(px, py, TS, TS);
-      // circuit dots
-      if ((x * 7 + y * 13) % 5 === 0) {
+      if (choir) {
+        // wax veins instead of circuit dots
+        if ((x * 5 + y * 11) % 4 === 0) {
+          ctx.strokeStyle = vis ? hsl(hue, 65, 30 + lum * 18, 0.3) : hsl(225, 18, 11, 0.25);
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(px + 4, py + TS - 6);
+          ctx.quadraticCurveTo(px + TS / 2, py + ((x + y) % 3) * 6 + 4, px + TS - 4, py + TS - 8);
+          ctx.stroke();
+        }
+      } else if ((x * 7 + y * 13) % 5 === 0) {
         ctx.fillStyle = vis ? hsl(hue, 70, 28 + lum * 20, 0.4) : hsl(225, 18, 11, 0.3);
         ctx.fillRect(px + TS / 2 - 1, py + TS / 2 - 1, 2, 2);
       }
@@ -1164,6 +1269,21 @@ function render(dt) {
   for (const it of G.items) if (G.visible[it.x + it.y * MW]) drawItem(it);
   for (const m of G.mons) if (G.visible[m.x + m.y * MW]) drawGlyph(m.x, m.y, m.kind, m);
   if (scene !== 'dead') drawPlayer();          // when dead, the shatter fragments are the corpse
+
+  // incense smoke: soft occluding puffs over everything it hides
+  for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+    const s = G.smoke[x + y * MW];
+    if (!s || !G.explored[x + y * MW]) continue;
+    const sa = clamp(s / 9, 0, 1);
+    const cx2 = x * TS + TS / 2, cy2 = y * TS + TS / 2;
+    ctx.fillStyle = `rgba(154,223,192,${0.13 * sa})`;
+    for (let i = 0; i < 3; i++) {
+      const wob = Math.sin(anim.t * 1.5 + x * 2 + y + i * 2.1) * 4;
+      ctx.beginPath();
+      ctx.arc(cx2 + (i - 1) * 8 + wob, cy2 + Math.cos(anim.t + i) * 4, TS * (0.42 + i * 0.1), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 
   // expanding impact rings
   for (const r of anim.rings) {
@@ -1534,6 +1654,16 @@ function renderTitle() {
     ctx.fillText(TOUCH ? 'TAP TO DESCEND' : 'PRESS ENTER', W / 2, 500);
     ctx.shadowBlur = 0;
   }
+  // the daily heist: one seed, shared by everyone, recorded locally
+  {
+    const dl = dailyLog();
+    const today = dl[dailyKey()];
+    const clears = Object.values(dl).filter(v => v.r === 'WIN').length;
+    const status = today ? (today.r === 'WIN' ? `CLEARED in ${today.turns} turns` : `died at ${today.ft}ft`) : 'unplayed';
+    ctx.font = `bold 13px ${MONO}`;
+    ctx.fillStyle = today && today.r === 'WIN' ? '#ffd34a' : '#c8a44a';
+    ctx.fillText(`${TOUCH ? 'TAP HERE' : '[D]'} DAILY HEIST ${dailyKey()} — ${status}${clears ? ` · ${clears} clear${clears > 1 ? 's' : ''}` : ''}`, W / 2, 531);
+  }
   ctx.font = `12px ${MONO}`; ctx.fillStyle = '#8496ac';
   if (TOUCH) {
     ctx.fillText('SWIPE TO MOVE · TAP TO WAIT OR USE STAIRS · TAP THE TOP BAR FOR VIALS · LAMP · SKILLS', W / 2, 560);
@@ -1562,6 +1692,7 @@ function renderDeath(dt) {
   ctx.fillText(`${G.p.deaths} · ${FT(G.depth)}ft · turn ${G.deathTurn ?? G.turn}${G.p.shard ? ' · the Shard sinks with you' : ''}`, W / 2, 330);
   ctx.fillStyle = '#9fb4cc'; ctx.font = `14px ${MONO}`;
   ctx.fillText(`${G.p.kills} destroyed · ${G.p.xpTotal} insight earned · seed ${G.seed}`, W / 2, 358);
+  if (G.daily) { ctx.fillStyle = '#c8a44a'; ctx.font = `bold 13px ${MONO}`; ctx.fillText(`DAILY HEIST — ${dailyKey()}`, W / 2, 384); }
   ctx.font = `bold 16px ${MONO}`; ctx.fillStyle = '#8be0ff';
   ctx.fillText(TOUCH ? 'TAP — descend again' : 'ENTER — descend again', W / 2, 430);
 }
@@ -1603,6 +1734,7 @@ function renderWin(dt) {
   ctx.fillStyle = '#9fb4cc'; ctx.font = `14px ${MONO}`;
   const sk = SKILLS.map(k => `${k.slice(0, 2)} ${G.p.skills[k]}`).join(' · ');
   ctx.fillText(`${sk} · seed ${G.seed}`, W / 2, 358);
+  if (G.daily) { ctx.fillStyle = '#ffd34a'; ctx.font = `bold 13px ${MONO}`; ctx.fillText(`DAILY HEIST CLEARED — ${dailyKey()}`, W / 2, 384); }
   ctx.font = `bold 16px ${MONO}`; ctx.fillStyle = '#8be0ff';
   ctx.fillText(TOUCH ? 'TAP — descend again' : 'ENTER — descend again', W / 2, 430);
 }
@@ -1612,14 +1744,15 @@ function renderWin(dt) {
 // ==================================================================
 const DIRS = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0], w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0], W: [0, -1], S: [0, 1], A: [-1, 0], D: [1, 0] };
 const TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
-function startRun() { newGame(Q.get('seed') ? +Q.get('seed') : (Math.random() * 1e9) | 0); scene = 'play'; }
-function restartRun() { newGame((Math.random() * 1e9) | 0); scene = 'play'; }
+function startRun() { newGame(Q.get('seed') ? +Q.get('seed') : (Math.random() * 1e9) | 0); scene = 'play'; ambientStart(); ambientTune(); }
+function restartRun() { newGame((Math.random() * 1e9) | 0); scene = 'play'; ambientStart(); ambientTune(); }
+function startDaily() { newGame(dailySeed()); G.daily = true; scene = 'play'; ambientStart(); ambientTune(); }
 
 window.addEventListener('keydown', e => {
   if (HEADLESS) return;
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
-  if (e.key === 'm' || e.key === 'M') { muted = !muted; AUDIO_ON = !muted; return; }
-  if (scene === 'title') { if (e.key === 'Enter') startRun(); return; }
+  if (e.key === 'm' || e.key === 'M') { muted = !muted; AUDIO_ON = !muted; if (master) master.gain.value = muted ? 0 : 0.35; return; }
+  if (scene === 'title') { if (e.key === 'Enter') startRun(); else if (e.key === 'd' || e.key === 'D') startDaily(); return; }
   if (scene === 'dead' || scene === 'won') { if (e.key === 'Enter') restartRun(); return; }
   if (overlay === 'skills') {
     if (e.key >= '1' && e.key <= '4') { playerTurn({ type: 'skill', i: +e.key - 1 }); return; }
@@ -1678,7 +1811,7 @@ canvas.addEventListener('touchend', e => {
   const [x, y] = canvasPos(t);
   const dx = x - touchStart[0], dy = y - touchStart[1];
   touchStart = null;
-  if (scene === 'title') { startRun(); return; }
+  if (scene === 'title') { if (y > 514 && y < 545) startDaily(); else startRun(); return; }
   if (scene === 'dead' || scene === 'won') { restartRun(); return; }
   if (overlay === 'help') { overlay = null; return; }
   if (overlay === 'skills') { skillsTap(x, y); return; }
@@ -1985,6 +2118,25 @@ const STAGES = {
     monsterAct(s);                // the lance fires
     log('The SENTINEL fires down the corridor.', '#ffb03a');
     anim.t = 0.4;
+  },
+  choir(f) {
+    newGame(9); scene = 'play';
+    while (G.depth < 6) { G.stats.floorsTurns.push(G.turn); descend(); }
+    // stage the Choir's two voices with a clear sight line
+    const cx2 = clamp(G.p.x + 5, 1, MW - 2);
+    for (let x = Math.min(G.p.x, cx2); x <= Math.max(G.p.x, cx2); x++) if (at(x, G.p.y) === T_WALL) setT(x, G.p.y, T_FLOOR);
+    const c = makeMon('chorist', cx2, G.p.y, true); c.state = 'hunt'; G.mons.push(c);
+    const ty2 = clamp(G.p.y - 2, 1, MH - 2);
+    if (at(G.p.x + 2, ty2) === T_WALL) setT(G.p.x + 2, ty2, T_FLOOR);
+    G.mons.push(makeMon('thurible', G.p.x + 2, ty2, true));
+    for (let dy = 0; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const sx = G.p.x - 3 + dx, sy = G.p.y + 2 + dy;
+      if (inMap(sx, sy) && WALKABLE(at(sx, sy))) G.smoke[sx + sy * MW] = 7;
+    }
+    G.p.lamp = 3; computeFOV();
+    monsterAct(c); ageFx(0.15); monsterAct(c);
+    log('The Choir. A hymn reaches for your lamp.', '#ffcf6a');
+    anim.t = 1.2;
   },
   dark() {
     newGame(31); scene = 'play';
