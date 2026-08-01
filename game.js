@@ -1375,13 +1375,24 @@ function renderSkills() {
     ctx.fillText(desc[i], x + 24, yy + 14);
   }
   ctx.font = `11px ${MONO}`; ctx.textAlign = 'center'; ctx.fillStyle = '#7d94ad';
-  ctx.fillText('[1-4]BUY · [S]/[ESC]CLOSE', x + w / 2, y + h - 14);
+  ctx.fillText(TOUCH ? 'TAP A ROW TO BUY · TAP OUTSIDE TO CLOSE' : '[1-4]BUY · [S]/[ESC]CLOSE', x + w / 2, y + h - 14);
 }
 
 function renderHelp() {
   const w = 560, h = 330, x = (W - w) / 2, y = (H - h) / 2;
   panel(x, y, w, h, 'SILQ — THE HEIST', '#c86bff');
-  const lines = [
+  const lines = TOUCH ? [
+    ['MOVE / ATTACK', 'swipe (bump into things to fight)'],
+    ['WAIT', 'tap the floor'],
+    ['STAIRS / GRAB', 'tap while standing on ▼ ▲ or the dais'],
+    ['POTIONS', 'tap the vials in the top bar'],
+    ['LAMP', 'tap [L]LAMP · bright sees far, is seen far'],
+    ['SKILLS', 'tap [S]KILLS · tap a row to buy'],
+    ['', ''],
+    ['DOWN', 'eight floors to the Vault'],
+    ['GRAB', 'pry the Prime Shard from the crown'],
+    ['OUT', 'climb back while the tower hunts'],
+  ] : [
     ['MOVE / ATTACK', 'arrows or WASD (bump to fight)'],
     ['WAIT', 'space or .'],
     ['STAIRS / GRAB', 'enter on ▼ ▲ or the dais'],
@@ -1520,11 +1531,17 @@ function renderTitle() {
     ctx.font = `bold 20px ${MONO}`;
     ctx.shadowColor = '#8be0ff'; ctx.shadowBlur = 14;
     ctx.fillStyle = '#8be0ff';
-    ctx.fillText('PRESS ENTER', W / 2, 500);
+    ctx.fillText(TOUCH ? 'TAP TO DESCEND' : 'PRESS ENTER', W / 2, 500);
     ctx.shadowBlur = 0;
   }
   ctx.font = `12px ${MONO}`; ctx.fillStyle = '#8496ac';
-  ctx.fillText('[WASD/↑↓←→]MOVE · BUMP TO FIGHT · [L]LAMP · [1-3]VIALS · [S]SKILLS · [?]HELP', W / 2, 560);
+  if (TOUCH) {
+    ctx.fillText('SWIPE TO MOVE · TAP TO WAIT OR USE STAIRS · TAP THE TOP BAR FOR VIALS · LAMP · SKILLS', W / 2, 560);
+    ctx.fillStyle = '#68788e';
+    ctx.fillText('best played in landscape', W / 2, 582);
+  } else {
+    ctx.fillText('[WASD/↑↓←→]MOVE · BUMP TO FIGHT · [L]LAMP · [1-3]VIALS · [S]SKILLS · [?]HELP', W / 2, 560);
+  }
   ctx.fillStyle = '#68788e';
   ctx.fillText('zero assets — every pixel and sound from code · AGPL', W / 2, 640);
 }
@@ -1546,7 +1563,7 @@ function renderDeath(dt) {
   ctx.fillStyle = '#9fb4cc'; ctx.font = `14px ${MONO}`;
   ctx.fillText(`${G.p.kills} destroyed · ${G.p.xpTotal} insight earned · seed ${G.seed}`, W / 2, 358);
   ctx.font = `bold 16px ${MONO}`; ctx.fillStyle = '#8be0ff';
-  ctx.fillText('ENTER — descend again', W / 2, 430);
+  ctx.fillText(TOUCH ? 'TAP — descend again' : 'ENTER — descend again', W / 2, 430);
 }
 
 function renderWin(dt) {
@@ -1587,19 +1604,23 @@ function renderWin(dt) {
   const sk = SKILLS.map(k => `${k.slice(0, 2)} ${G.p.skills[k]}`).join(' · ');
   ctx.fillText(`${sk} · seed ${G.seed}`, W / 2, 358);
   ctx.font = `bold 16px ${MONO}`; ctx.fillStyle = '#8be0ff';
-  ctx.fillText('ENTER — descend again', W / 2, 430);
+  ctx.fillText(TOUCH ? 'TAP — descend again' : 'ENTER — descend again', W / 2, 430);
 }
 
 // ==================================================================
 // INPUT
 // ==================================================================
 const DIRS = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0], w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0], W: [0, -1], S: [0, 1], A: [-1, 0], D: [1, 0] };
+const TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+function startRun() { newGame(Q.get('seed') ? +Q.get('seed') : (Math.random() * 1e9) | 0); scene = 'play'; }
+function restartRun() { newGame((Math.random() * 1e9) | 0); scene = 'play'; }
+
 window.addEventListener('keydown', e => {
   if (HEADLESS) return;
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
   if (e.key === 'm' || e.key === 'M') { muted = !muted; AUDIO_ON = !muted; return; }
-  if (scene === 'title') { if (e.key === 'Enter') { newGame(Q.get('seed') ? +Q.get('seed') : (Math.random() * 1e9) | 0); scene = 'play'; } return; }
-  if (scene === 'dead' || scene === 'won') { if (e.key === 'Enter') { newGame((Math.random() * 1e9) | 0); scene = 'play'; } return; }
+  if (scene === 'title') { if (e.key === 'Enter') startRun(); return; }
+  if (scene === 'dead' || scene === 'won') { if (e.key === 'Enter') restartRun(); return; }
   if (overlay === 'skills') {
     if (e.key >= '1' && e.key <= '4') { playerTurn({ type: 'skill', i: +e.key - 1 }); return; }
     if (e.key === 's' || e.key === 'S' || e.key === 'Escape') overlay = null;
@@ -1619,6 +1640,59 @@ window.addEventListener('keydown', e => {
   if (e.key >= '1' && e.key <= '3') { playerTurn({ type: 'potion', i: +e.key - 1 }); return; }
   if (e.key === 'l' || e.key === 'L') { playerTurn({ type: 'lamp', lvl: (G.p.lamp % 4) + 1 }); return; }
 });
+
+// ---------- touch: tap to start, swipe to step, tap for context, tappable HUD ----------
+function canvasPos(t) {
+  const r = canvas.getBoundingClientRect();
+  return [(t.clientX - r.left) * W / r.width, (t.clientY - r.top) * H / r.height];
+}
+function hudTap(x, y) {
+  if (y < HUD_H) {
+    for (let i = 0; i < 3; i++) {
+      const bx = W - 350 + i * 62;
+      if (x >= bx - 8 && x <= bx + 54) { playerTurn({ type: 'potion', i }); return true; }
+    }
+    if (x >= 285 && x <= 405 && y >= 22) { playerTurn({ type: 'lamp', lvl: (G.p.lamp % 4) + 1 }); return true; }
+    if (x >= W - 175 && x <= W - 88 && y >= 24) { overlay = 'skills'; return true; }
+    if (x >= W - 88 && y >= 24) { overlay = 'help'; return true; }
+  }
+  return false;
+}
+function skillsTap(x, y) {
+  const w = 460, h = 250, px = (W - w) / 2, py = (H - h) / 2;
+  if (x < px || x > px + w || y < py || y > py + h) { overlay = null; return; }
+  const i = Math.floor((y - (py + 66)) / 36);
+  if (i >= 0 && i < 4) playerTurn({ type: 'skill', i });
+}
+let touchStart = null;
+canvas.addEventListener('touchstart', e => {
+  if (HEADLESS) return;
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  touchStart = canvasPos(t);
+}, { passive: false });
+canvas.addEventListener('touchend', e => {
+  if (HEADLESS || !touchStart) return;
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  const [x, y] = canvasPos(t);
+  const dx = x - touchStart[0], dy = y - touchStart[1];
+  touchStart = null;
+  if (scene === 'title') { startRun(); return; }
+  if (scene === 'dead' || scene === 'won') { restartRun(); return; }
+  if (overlay === 'help') { overlay = null; return; }
+  if (overlay === 'skills') { skillsTap(x, y); return; }
+  if (!G) return;
+  if (Math.hypot(dx, dy) > 26) {
+    if (Math.abs(dx) > Math.abs(dy)) playerTurn({ type: 'move', dx: Math.sign(dx), dy: 0 });
+    else playerTurn({ type: 'move', dx: 0, dy: Math.sign(dy) });
+    return;
+  }
+  if (hudTap(x, y)) return;
+  const here = at(G.p.x, G.p.y);
+  if (here === T_DOWN || here === T_UP || here === T_DAIS) playerTurn({ type: 'stairs' });
+  else playerTurn({ type: 'wait' });
+}, { passive: false });
 
 // ==================================================================
 // HEIST BOT

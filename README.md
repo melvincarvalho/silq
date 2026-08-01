@@ -18,7 +18,8 @@ Tolkien and Sil-Q to its authors; both are revered here, neither is copied.
 **There are no assets.** Every tile, creature and sound is generated from
 code. Two files: `index.html`, `game.js`. Arrows/WASD to move, bump to fight,
 `L` cycles the lamp, `1–3` quaff vials, `S` spends insight, Enter uses
-stairs — and grabs the Shard.
+stairs — and grabs the Shard. On a phone: tap to start, swipe to step, tap
+to wait or use stairs, and tap the top bar for vials, lamp and skills.
 
 ```bash
 python3 -m http.server 8000   # or just open index.html
