@@ -534,6 +534,8 @@ function monsterAttack(m) {
     if (p.fxFlash > 0) p.fxFlash = 0;         // a whiff clears the damage tint
   } else {
     p.hp -= res.dmg;
+    // lunge is a unit step, not the full gap — a turret five tiles out must not teleport through its own beam
+    m.fxLunge = { dx: Math.sign(p.x - m.x), dy: Math.sign(p.y - m.y), t: dist(m.x, m.y, p.x, p.y) === 1 ? 1 : 0.4 };
     if (res.dmg === 0) {
       log(`The ${d.name}'s blow is absorbed by your armor. [${res.math.dmgT} dmg − ${res.math.protT} prot]`, '#8aa0b8');
       float(p.x, p.y, 'blocked', '#8aa0b8', 12);
@@ -542,7 +544,6 @@ function monsterAttack(m) {
       float(p.x, p.y, `${res.dmg}`, '#ff5a5a', 18);
     }
     burst(p.x, p.y, '#ff5a5a', 12);
-    m.fxLunge = { dx: p.x - m.x, dy: p.y - m.y, t: 1 };
     p.fxFlash = 1;
     anim.shake = Math.min(8, anim.shake + 3);
     if (!HEADLESS) SFX.hit();
@@ -815,6 +816,8 @@ function die(cause) {
   G.deathTurn = G.turn;
   scene = 'dead';
   anim.deathT = 0;
+  // only this turn's fatal beat survives onto the death frame
+  anim.floats = anim.floats.filter(f => f.turn === G.turn && f.text !== 'miss');
   // the diamond shatters
   anim.frag = {
     x: G.p.x * TS + TS / 2, y: G.p.y * TS + TS / 2, t: 0,
@@ -1085,6 +1088,14 @@ function render(dt) {
   ctx.fillRect(0, 0, MW * TS, MH * TS);
   ctx.restore();
 
+  // depth-fog vignette: the void beyond the lamp reads as atmosphere, not dead canvas
+  const vgx = p.x * TS + TS / 2, vgy = p.y * TS + TS / 2;
+  const vg = ctx.createRadialGradient(vgx, vgy, 250, vgx, vgy, 700);
+  vg.addColorStop(0, 'rgba(2,1,6,0)');
+  vg.addColorStop(1, hsl(hue, 40, 3, 0.72));
+  ctx.fillStyle = vg;
+  ctx.fillRect(anim.camX - 40, anim.camY - 40 - HUD_H, W + 80, VH + HUD_H + 120);
+
   // beams under actors: the shooter's silhouette stays whole. Segment clamped muzzle→target edge.
   for (const b of anim.beams) {
     let x0 = b.x0 * TS + TS / 2, y0 = b.y0 * TS + TS / 2, x1 = b.x1 * TS + TS / 2, y1 = b.y1 * TS + TS / 2;
@@ -1123,6 +1134,32 @@ function render(dt) {
   }
   anim.beams = anim.beams.filter(b => b.ttl > 0);
 
+  // flash-bomb under the actors: an authored detonation — core, falloff, spokes — with the player silhouetted against it
+  if (anim.flashT > 0) {
+    const fa = Math.pow(anim.flashT, 1.6);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const fg = ctx.createRadialGradient(anim.flashX, anim.flashY, 0, anim.flashX, anim.flashY, 340);
+    fg.addColorStop(0, `rgba(255,255,255,${fa})`);
+    fg.addColorStop(0.35, `rgba(240,246,255,${fa * 0.6})`);
+    fg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = fg;
+    ctx.fillRect(anim.flashX - 360, anim.flashY - 360, 720, 720);
+    // radial spokes give the blast structure a stills-readable geometry
+    ctx.strokeStyle = `rgba(255,250,230,${fa * 0.7})`;
+    ctx.lineWidth = 2; ctx.lineCap = 'round';
+    for (let i = 0; i < 12; i++) {
+      const sa = i * Math.PI / 6 + 0.26;
+      const r0 = 40 + (1 - anim.flashT) * 120, r1 = r0 + 60 + (i % 3) * 40;
+      ctx.beginPath();
+      ctx.moveTo(anim.flashX + Math.cos(sa) * r0, anim.flashY + Math.sin(sa) * r0);
+      ctx.lineTo(anim.flashX + Math.cos(sa) * r1, anim.flashY + Math.sin(sa) * r1);
+      ctx.stroke();
+    }
+    ctx.restore();
+    anim.flashT -= dt * 1.8;
+  }
+
   drawVorl();
   for (const it of G.items) if (G.visible[it.x + it.y * MW]) drawItem(it);
   for (const m of G.mons) if (G.visible[m.x + m.y * MW]) drawGlyph(m.x, m.y, m.kind, m);
@@ -1155,21 +1192,6 @@ function render(dt) {
       ctx.restore();
     }
     ctx.shadowBlur = 0;
-  }
-
-  // flash-bomb: a real detonation — blinding core, radial falloff, expanding rings
-  if (anim.flashT > 0) {
-    const fa = Math.pow(anim.flashT, 1.6);
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    const fg = ctx.createRadialGradient(anim.flashX, anim.flashY, 0, anim.flashX, anim.flashY, 340);
-    fg.addColorStop(0, `rgba(255,255,255,${fa})`);
-    fg.addColorStop(0.35, `rgba(240,246,255,${fa * 0.6})`);
-    fg.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = fg;
-    ctx.fillRect(anim.flashX - 360, anim.flashY - 360, 720, 720);
-    ctx.restore();
-    anim.flashT -= dt * 1.8;
   }
 
   // particles & floats
@@ -1449,10 +1471,14 @@ function renderTitle() {
       }
     }
   }
-  // scanline sweep
+  // scanline sweep — a soft gradient band, so it reads as CRT atmosphere, never as a seam
   const sy = (t * 60) % H;
-  ctx.fillStyle = 'rgba(139,224,255,0.05)';
-  ctx.fillRect(0, sy, W, 3);
+  const sg = ctx.createLinearGradient(0, sy - 14, 0, sy + 14);
+  sg.addColorStop(0, 'rgba(139,224,255,0)');
+  sg.addColorStop(0.5, 'rgba(139,224,255,0.045)');
+  sg.addColorStop(1, 'rgba(139,224,255,0)');
+  ctx.fillStyle = sg;
+  ctx.fillRect(0, sy - 14, W, 28);
   // scrims: one smooth pool of dark behind each text group — full-canvas fills so gradients die naturally, no seams
   for (const [cy, ch] of [[240, 260], [400, 90], [500, 60], [560, 40], [640, 40]]) {
     const g = ctx.createRadialGradient(W / 2, cy, 60, W / 2, cy, ch + 320);

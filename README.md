@@ -75,7 +75,8 @@ player — both now confess on screen.
 |---|---|---|---|---|---|
 | 1 | 3.5 | 3.0 | 5.0 | **3.8** | 7.5 |
 | 2 | 4.5 | 5.0 | 6.5 | **5.3** | 9.0 |
-| 3 (final) | 6.5 | 7.0 | 8.0 | **7.2** | **9.0** |
+| 3 | 6.5 | 7.0 | 8.0 | **7.2** | **9.0** |
+| 4 (final) | 7.0 | 7.25 | 8.5 | **7.6** | **9.0** |
 
 Round-1 fidelity verdict: *"the opposed-roll, dice-vs-armor,
 wake-the-dungeon, steal-and-run spine is authentically Sil and provably
@@ -89,10 +90,17 @@ Game-feel — *"every hit, block, kill, and panic beat now leaves visible
 evidence on screen — a flash that floods the floor, a death that shatters
 into pieces you can count."* HUD — *"a HUD that shows its dice: every roll,
 receipt, and resource is legible at a glance under one consistent key
-grammar."* Four small post-panel fixes (beam muzzle stand-off, self-lit
-vault flanks, title-grid jitter, gold currency diamonds in the skills and
-death panels) were applied after the final scores; the numbers above are
-the panel's, not post-fix.
+grammar."* Round 4 was a verification pass: the panel confirmed five of
+seven round-3 fixes in the pixels and caught two that had not landed — the
+title "seam" (which turned out to be the CRT scanline sweep parked at the
+same y in every deterministic capture) and a sentinel beam still spearing
+out of its own shooter. That second one had a better cause than the
+critic's guess of a flipped sign: the beam clamp was correct all along,
+but the attack-lunge offset multiplied the full tile-delta vector instead
+of a unit step, so a turret firing from five tiles drew itself two tiles
+through its own beam. Melee attacks (delta ±1) had masked the bug. Both
+were fixed after the final scores; the numbers above are the panel's,
+not post-fix.
 
 ## Honest assessment
 
