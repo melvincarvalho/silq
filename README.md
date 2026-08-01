@@ -1,10 +1,11 @@
 # SILQ
 
-Fifth game in the harsh-critic-loop series, after
+Sixth game in the harsh-critic-loop series, after
 [NEONOID](https://github.com/melvincarvalho/neonoid),
 [NEON MINER](https://github.com/melvincarvalho/neonminer),
-[NEODROID](https://github.com/melvincarvalho/neodroid) and
-[NEON DASH](https://github.com/melvincarvalho/neondash). A tribute to
+[NEODROID](https://github.com/melvincarvalho/neodroid),
+[NEON DASH](https://github.com/melvincarvalho/neondash) and
+[NEONLINGS](https://github.com/melvincarvalho/neonlings). A tribute to
 [Sil-Q](https://github.com/sil-quirk/sil-q): a turn-based heist roguelike.
 Descend eight floors of a dead neon arcology, pry the **Prime Shard** from the
 crown of the sleeping machine-god **VORL**, and climb back out while the tower
