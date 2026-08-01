@@ -312,6 +312,7 @@ function descend() {
     for (let y = vaultRoom.y - 1; y <= vaultRoom.y + vaultRoom.h; y++)
       for (let x = vaultRoom.x - 1; x <= vaultRoom.x + vaultRoom.w; x++)
         if (inMap(x, y)) G.explored[x + y * MW] = 1;
+    G.vaultRect = vaultRoom;
     // service lift out: a real run, but a winnable one — mid-distance, outside the vault
     const lift = tileAtDist(G.map, dx, dy - 1, 16, 24, vaultRoom);
     setT(lift % MW, (lift / MW) | 0, T_UP);
@@ -1028,7 +1029,11 @@ function render(dt) {
     const px = x * TS, py = y * TS;
     const dd = Math.hypot(x - p.x, y - p.y);
     const lightR = visRadius();
-    const lum = vis ? clamp(1 - dd / (lightR + 1), 0.12, 1) : 0;
+    let lum = vis ? clamp(1 - dd / (lightR + 1), 0.12, 1) : 0;
+    // the throne room is self-lit: its whole enclosure glows, flanks included
+    if (G.vorl && G.vaultRect && x >= G.vaultRect.x - 1 && x <= G.vaultRect.x + G.vaultRect.w && y >= G.vaultRect.y - 1 && y <= G.vaultRect.y + G.vaultRect.h) {
+      vis = 1; lum = Math.max(lum, 0.3);
+    }
     if (t === T_WALL) {
       // value ladder: walls solid, clearly above floor, with a lit top edge
       ctx.fillStyle = vis ? hsl(hue, 45, 15 + lum * 13) : hsl(222, 20, 9);
@@ -1085,7 +1090,7 @@ function render(dt) {
     let x0 = b.x0 * TS + TS / 2, y0 = b.y0 * TS + TS / 2, x1 = b.x1 * TS + TS / 2, y1 = b.y1 * TS + TS / 2;
     const len = Math.hypot(x1 - x0, y1 - y0) || 1;
     const ux = (x1 - x0) / len, uy = (y1 - y0) / len;
-    x0 += ux * TS * 0.45; y0 += uy * TS * 0.45;
+    x0 += ux * TS * 0.72; y0 += uy * TS * 0.72;   // muzzle stand-off: the shooter is never behind its own beam
     x1 -= ux * TS * 0.32; y1 -= uy * TS * 0.32;
     const a = clamp(b.ttl * 4, 0, 1);
     ctx.save();
@@ -1095,8 +1100,8 @@ function render(dt) {
       ctx.strokeStyle = hexA(b.color, a * 0.45); ctx.lineWidth = 2; ctx.shadowColor = b.color; ctx.shadowBlur = 8;
       ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
     } else {
-      ctx.shadowColor = b.color; ctx.shadowBlur = 14;
-      ctx.strokeStyle = hexA(b.color, a * 0.25); ctx.lineWidth = 13;
+      ctx.shadowColor = b.color; ctx.shadowBlur = 10;
+      ctx.strokeStyle = hexA(b.color, a * 0.25); ctx.lineWidth = 10;
       ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
       ctx.strokeStyle = hexA(b.color, a * 0.65); ctx.lineWidth = 5;
       ctx.stroke();
@@ -1271,9 +1276,9 @@ function renderHUD() {
   const protTxt = ARMORS[p.armor].prot[0] ? ARMORS[p.armor].prot.join('d') : '—';
   ctx.fillText(`${WEAPONS[p.weapon].name} ${WEAPONS[p.weapon].dmg.join('d')} · ${ARMORS[p.armor].name} ${protTxt}${p.veil > 0 ? ` · VEIL ${p.veil}` : ''}`, W / 2, 41);
   if (p.shard) {
-    // the shard indicator wears the shard's own gold
-    ctx.font = `bold 11px ${MONO}`; ctx.fillStyle = '#ffd34a';
-    ctx.fillText('◆ SHARD', W / 2, 12);
+    // the shard indicator wears the shard's own gold, clear of the header's ascenders
+    ctx.font = `bold 10px ${MONO}`; ctx.fillStyle = '#ffd34a';
+    ctx.fillText('◆ SHARD', W / 2, 9);
   }
   // right: insight + potions — insight wears gold, never the player's cyan
   ctx.textAlign = 'right';
@@ -1340,8 +1345,10 @@ function renderSkills() {
     ctx.fillStyle = can ? '#5dff8a' : '#3a4258';
     ctx.fillText(`→ ${cur + 1}`, x + 220, yy);
     ctx.textAlign = 'right';
-    ctx.fillText(`${cost}◆`, x + w - 60, yy);
+    ctx.fillText(`${cost}`, x + w - 74, yy);
     ctx.textAlign = 'left';
+    ctx.fillStyle = can ? '#ffd34a' : hexA('#ffd34a', 0.4);   // the currency diamond is always gold
+    ctx.fillText('◆', x + w - 70, yy);
     ctx.fillStyle = '#7d94ad'; ctx.font = `11px ${MONO}`;
     ctx.fillText(desc[i], x + 24, yy + 14);
   }
@@ -1437,7 +1444,8 @@ function renderTitle() {
       if ((x * 13 + i * 29) % 7 < 4) {
         const centerBias = 1.35 - Math.abs(x - W / 2) / (W * 0.55) - Math.abs(y - 300) / 900;
         ctx.strokeStyle = hsl(hue, 80, 40, 0.42 * fadeTop * clamp(centerBias, 0.25, 1));
-        ctx.strokeRect(x, y, 18, 40);
+        const jy = ((x * 7 + i * 11) % 3 - 1) * 4;   // per-column jitter: no row ever forms a seam
+        ctx.strokeRect(x, y + jy, 18, 40);
       }
     }
   }
@@ -1510,7 +1518,7 @@ function renderDeath(dt) {
   ctx.font = `16px ${MONO}`; ctx.fillStyle = '#e8fbff';
   ctx.fillText(`${G.p.deaths} · ${FT(G.depth)}ft · turn ${G.deathTurn ?? G.turn}${G.p.shard ? ' · the Shard sinks with you' : ''}`, W / 2, 330);
   ctx.fillStyle = '#9fb4cc'; ctx.font = `14px ${MONO}`;
-  ctx.fillText(`${G.p.kills} destroyed · ${G.p.xpTotal}◆ insight earned · seed ${G.seed}`, W / 2, 358);
+  ctx.fillText(`${G.p.kills} destroyed · ${G.p.xpTotal} insight earned · seed ${G.seed}`, W / 2, 358);
   ctx.font = `bold 16px ${MONO}`; ctx.fillStyle = '#8be0ff';
   ctx.fillText('ENTER — descend again', W / 2, 430);
 }
